@@ -7,6 +7,8 @@ const Web3 = require('web3')
 const Machinomy = require('machinomy').default
 const Payment = require('machinomy/lib/payment').default
 const PluginMiniAccounts = require('ilp-plugin-mini-accounts')
+const StoreWrapper = require('./src/store-wrapper')
+const Account = require('./src/account')
 
 class Plugin extends PluginMiniAccounts {
   constructor (opts) {
@@ -49,10 +51,10 @@ class Plugin extends PluginMiniAccounts {
   }
 
   async _preConnect () {
-    this.machinomy = new Machinomy(this.account, this.web3, {
+    this._machinomy = new Machinomy(this._account, this._web3, {
       engine: 'nedb',
-      databaseFile: this.db,
-      minimumChannelAmount: this.minimumChannelAmount
+      databaseFile: this._db,
+      minimumChannelAmount: this._minimumChannelAmount
     })
   }
 
@@ -192,13 +194,13 @@ class Plugin extends PluginMiniAccounts {
           debug(`failed to pay account.
             destination=${destination}
             error=${e && e.stack}`)
-        })
-    } */
+        }) */
+    }
   }
 
-  _sendMoneyToAccount (transferAmount, to) {
+  async _sendMoneyToAccount (transferAmount, to) {
     const account = this._getAccount(to)
-    const payment = await this.machinomy.nextPayment(
+    const payment = await this._machinomy.nextPayment(
       account.getClientChannel(),
       new BigNumber(transferAmount),
       '')
@@ -215,10 +217,15 @@ class Plugin extends PluginMiniAccounts {
     const primary = data.protocolData[0]
     if (primary.protocolName === 'machinomy') {
       const payment = new Payment(JSON.parse(primary.data.toString()))
-      await this.machinomy.acceptPayment(payment)
+      console.log("GOT PAYMENT", payment)
+      await this._machinomy.acceptPayment(payment)
       const secured = account.getSecuredBalance()
       const newSecured = secured.add(payment.price)
       account.setSecuredBalance(newSecured.toString())
+      debug('got money. secured=' + secured.toString(),
+        'new=' + newSecured.toString())
     }
   }
 }
+
+module.exports = Plugin

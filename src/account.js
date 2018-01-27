@@ -39,6 +39,14 @@ class Account {
     return this._store.set(BALANCE(this._account), balance)
   }
 
+  getSecuredBalance () {
+    return new BigNumber(this._store.get(SECURED_BALANCE(this._account)) || '0')
+  }
+
+  setSecuredBalance (balance) {
+    return this._store.set(SECURED_BALANCE(this._account), balance)
+  }
+
   isBlocked () {
     return this._store.get(IS_BLOCKED(this._account))
   }
