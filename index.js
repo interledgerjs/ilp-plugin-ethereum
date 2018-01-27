@@ -1,5 +1,6 @@
 'use strict'
 const crypto = require('crypto')
+const IlpPacket = require('ilp-packet')
 const debug = require('debug')('ilp-plugin-ethereum-asym-client')
 const BtpPacket = require('btp-packet')
 const BigNumber = require('bignumber.js')
@@ -9,6 +10,15 @@ const Payment = require('machinomy/lib/payment').default
 const PluginMiniAccounts = require('ilp-plugin-mini-accounts')
 const StoreWrapper = require('./src/store-wrapper')
 const Account = require('./src/account')
+
+async function _requestId () {
+  return new Promise((resolve, reject) => {
+    crypto.randomBytes(4, (err, buf) => {
+      if (err) reject(err)
+      resolve(buf.readUInt32BE(0))
+    })
+  })
+}
 
 class Plugin extends PluginMiniAccounts {
   constructor (opts) {
@@ -46,7 +56,9 @@ class Plugin extends PluginMiniAccounts {
   _extraInfo (account) {
     return {
       ethereumAccount: this._account,
-      account: this._prefix + account.getAccount()
+      account: this._prefix + account.getAccount(),
+      minimumChannelAmount: this._minimumChannelAmount,
+      clientChannel: account.getClientChannel()
     }
   }
 
@@ -61,17 +73,6 @@ class Plugin extends PluginMiniAccounts {
   async _connect (address, { requestId, data }) {
     const account = this._getAccount(address)
     await account.connect()
-
-    // TODO: you need to send some money up front to
-    // cover the costs of this channel
-    // (should be 2 tx fees worth)
-    /*
-    const clientChannel = account.getClientChannel()
-    if (!clientChannel) {
-      // TODO: create an outgoing channel
-      // account.setClientChannel( TODO )
-    }
-    */
 
     return null
   }
@@ -176,15 +177,14 @@ class Plugin extends PluginMiniAccounts {
       }
 
       // send off a transfer in the background to settle
-      /* TODO: only do this once we've sorted the fee thing
-      util._requestId()
-        .then((requestId) => {
+      _requestId()
+        .then(async requestId => {
           return this._call(destination, {
             type: BtpPacket.TYPE_TRANSFER,
             requestId,
             data: {
               amount: preparePacket.data.amount,
-              protocolData: this._sendMoneyToAccount(
+              protocolData: await this._sendMoneyToAccount(
                 preparePacket.data.amount,
                 destination)
             }
@@ -194,14 +194,30 @@ class Plugin extends PluginMiniAccounts {
           debug(`failed to pay account.
             destination=${destination}
             error=${e && e.stack}`)
-        }) */
+        })
     }
   }
 
   async _sendMoneyToAccount (transferAmount, to) {
     const account = this._getAccount(to)
+    const clientChannel = account.getClientChannel()
+    if (!clientChannel) {
+      throw new Error('client channel has not yet been funded.')
+    }
+
+    const channels = await this._machinomy.channels()
+    const currentChannel = channels
+      .filter(c => c.channelId === clientChannel)[0]
+
+    if (currentChannel.spent.add(transferAmount).gte(currentChannel.value)) {
+      // TODO: do this pre-emptively and asynchronously
+      console.log('channel:', currentChannel)
+      debug('funding channel for', currentChannel.value.toString())
+      await this._machinomy.deposit(clientChannel, currentChannel.value)
+    }
+
     const payment = await this._machinomy.nextPayment(
-      account.getClientChannel(),
+      clientChannel,
       new BigNumber(transferAmount),
       '')
 
@@ -224,6 +240,15 @@ class Plugin extends PluginMiniAccounts {
       account.setSecuredBalance(newSecured.toString())
       debug('got money. secured=' + secured.toString(),
         'new=' + newSecured.toString())
+
+      if (newSecured.gte(this._minimumChannelAmount) &&
+        !account.getClientChannel()) {
+          const result = await this._machinomy.requireOpenChannel(
+            this._account,
+            payment.sender,
+            this._minimumChannelAmount)
+          account.setClientChannel(result.channelId)
+      }
     }
   }
 }
