@@ -4,7 +4,6 @@ const BigNumber = require('bignumber.js')
 
 const BALANCE = a => a
 const SECURED_BALANCE = a => a + ':secured_balance'
-const CHANNEL = a => a + ':channel'
 const IS_BLOCKED = a => a + ':block'
 const CLIENT_CHANNEL = a => a + ':client_channel'
 
@@ -21,7 +20,6 @@ class Account {
   async connect () {
     await Promise.all([
       this._store.load(BALANCE(this._account)),
-      this._store.load(CHANNEL(this._account)),
       this._store.load(IS_BLOCKED(this._account)),
       this._store.load(CLIENT_CHANNEL(this._account))
     ])
@@ -29,7 +27,6 @@ class Account {
 
   async disconnect () {
     this._store.unload(BALANCE(this._account))
-    this._store.unload(CHANNEL(this._account))
     this._store.unload(IS_BLOCKED(this._account))
     this._store.unload(CLIENT_CHANNEL(this._account))
   }
@@ -42,20 +39,12 @@ class Account {
     return this._store.set(BALANCE(this._account), balance)
   }
 
-  getChannel () {
-    return this._store.get(CHANNEL(this._account))
-  }
-
   isBlocked () {
     return this._store.get(IS_BLOCKED(this._account))
   }
 
   getClientChannel () {
     return this._store.get(CLIENT_CHANNEL(this._account))
-  }
-
-  setChannel (channel, paychan) {
-    return this._store.set(CHANNEL(this._account), channel)
   }
 
   block (isBlocked = true) {

@@ -19,7 +19,7 @@ class Plugin extends PluginMiniAccounts {
       ? new Web3.providers.HttpProvider(this._provider)
       : this._provider)
 
-    this._bandwidth = opts.maxBalance || 1000
+    this._bandwidth = 0
     this._store = new StoreWrapper(opts._store)
 
     this._channelToAccount = new Map()
@@ -43,7 +43,6 @@ class Plugin extends PluginMiniAccounts {
 
   _extraInfo (account) {
     return {
-      channel: account.getChannel(),
       ethereumAccount: this._account,
       account: this._prefix + account.getAccount()
     }
@@ -61,18 +60,16 @@ class Plugin extends PluginMiniAccounts {
     const account = this._getAccount(address)
     await account.connect()
 
-    const existingChannel = account.getChannel()
-    if (existingChannel) {
-      this._channelToAccount.set(existingChannel, account)
-      // TODO: on what schedule to close?
-      await this._registerAutoClaim(account)
-    }
-
+    // TODO: you need to send some money up front to
+    // cover the costs of this channel
+    // (should be 2 tx fees worth)
+    /*
     const clientChannel = account.getClientChannel()
     if (!clientChannel) {
       // TODO: create an outgoing channel
-      account.setClientChannel(/* TODO */)
+      // account.setClientChannel( TODO )
     }
+    */
 
     return null
   }
@@ -87,29 +84,6 @@ class Plugin extends PluginMiniAccounts {
         contentType: BtpPacket.MIME_APPLICATION_JSON,
         data: Buffer.from(JSON.stringify(this._extraInfo(account)))
       }]
-    } else if (protocolMap.channel) {
-      // TODO: prove channel ownership
-      const channel = protocolMap.channel.toString('hex')
-      const existingChannel = account.getChannel()
-      if (existingChannel && existingChannel !== channel) {
-        throw new Error(`there is already an existing channel on this account
-          and it doesn't match the 'channel' protocolData`)
-      }
-
-      await this._store.load('channel:' + channel)
-      const accountForChannel = this._store.get('channel:' + channel)
-      if (accountForChannel && account.getAccount() !== accountForChannel) {
-        throw new Error(`this channel has already been associated with a ` +
-          `different account. account=${account.getAccount()} associated=${accountForChannel}`)
-      }
-
-      this._channelToAccount.set(channel, account)
-      this._store.set('channel:' + channel, account.getAccount())
-      account.setChannel(channel, paychan)
-
-      // TODO: on what schedule to close?
-      await this._registerAutoClaim(account)
-      debug('registered payment channel. account=', account.getAccount())
     } else if (protocolMap.ilp) {
       let response = await Promise.race([
         this._dataHandler(ilp.data),
@@ -159,16 +133,6 @@ class Plugin extends PluginMiniAccounts {
   _handleIncomingPrepare (account, ilpData) {
     const { amount } = IlpPacket.deserializeIlpPrepare(ilpData)
 
-    if (!account.getChannel()) {
-      throw new Error(`Incoming traffic won't be accepted until a channel
-        to the connector is established.`)
-    }
-
-    // TODO: we need to watch to see if the channel closes
-    if (account.isBlocked()) {
-      throw new Error('This account has been closed.')
-    }
-
     const secured = account.getSecuredBalance()
     const prepared = account.getBalance()
     const newPrepared = prepared.add(amount)
@@ -210,6 +174,7 @@ class Plugin extends PluginMiniAccounts {
       }
 
       // send off a transfer in the background to settle
+      /* TODO: only do this once we've sorted the fee thing
       util._requestId()
         .then((requestId) => {
           return this._call(destination, {
@@ -228,7 +193,7 @@ class Plugin extends PluginMiniAccounts {
             destination=${destination}
             error=${e && e.stack}`)
         })
-    }
+    } */
   }
 
   _sendMoneyToAccount (transferAmount, to) {
