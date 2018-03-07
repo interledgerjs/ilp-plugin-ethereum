@@ -26,7 +26,7 @@ class Plugin extends PluginMiniAccounts {
     this._account = opts.account
     this._db = opts.db || 'machinomy_db'
     this._provider = opts.provider || 'http://localhost:8545'
-    this._minimumChannelAmount = opts.minimumChannelAmount || new BigNumber(100)
+    this._minimumChannelAmount = new BigNumber(opts.minimumChannelAmount || 100)
     this._web3 = new Web3(typeof this._provider === 'string'
       ? new Web3.providers.HttpProvider(this._provider)
       : this._provider)
