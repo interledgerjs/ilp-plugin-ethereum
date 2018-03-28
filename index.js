@@ -6,7 +6,7 @@ const BtpPacket = require('btp-packet')
 const BigNumber = require('bignumber.js')
 const Web3 = require('web3')
 const Machinomy = require('machinomy').default
-const Payment = require('machinomy/lib/Payment').default
+const Payment = require('machinomy/dist/lib/payment').default
 const PluginMiniAccounts = require('ilp-plugin-mini-accounts')
 const StoreWrapper = require('./src/store-wrapper')
 const Account = require('./src/account')
@@ -26,7 +26,7 @@ class Plugin extends PluginMiniAccounts {
     this._account = opts.account
     this._db = opts.db || 'machinomy_db'
     this._provider = opts.provider || 'http://localhost:8545'
-    this._minimumChannelAmount = opts.minimumChannelAmount || 100
+    this._minimumChannelAmount = new BigNumber(opts.minimumChannelAmount || 100)
     this._web3 = new Web3(typeof this._provider === 'string'
       ? new Web3.providers.HttpProvider(this._provider)
       : this._provider)
@@ -64,8 +64,7 @@ class Plugin extends PluginMiniAccounts {
 
   async _preConnect () {
     this._machinomy = new Machinomy(this._account, this._web3, {
-      engine: 'nedb',
-      databaseFile: this._db,
+      databaseUrl: 'nedb://' + this._db,
       minimumChannelAmount: this._minimumChannelAmount
     })
   }
