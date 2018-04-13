@@ -6,7 +6,6 @@ const BtpPacket = require('btp-packet')
 const BigNumber = require('bignumber.js')
 const Web3 = require('web3')
 const Machinomy = require('machinomy').default
-const Payment = require('machinomy/lib/payment').default
 const PluginMiniAccounts = require('ilp-plugin-mini-accounts')
 const StoreWrapper = require('./src/store-wrapper')
 const Account = require('./src/account')
@@ -26,7 +25,7 @@ class Plugin extends PluginMiniAccounts {
     this._account = opts.account
     this._db = opts.db || 'machinomy_db'
     this._provider = opts.provider || 'http://localhost:8545'
-    this._minimumChannelAmount = opts.minimumChannelAmount || 100
+    this._minimumChannelAmount = new BigNumber(opts.minimumChannelAmount || 100)
     this._web3 = new Web3(typeof this._provider === 'string'
       ? new Web3.providers.HttpProvider(this._provider)
       : this._provider)
@@ -64,8 +63,7 @@ class Plugin extends PluginMiniAccounts {
 
   async _preConnect () {
     this._machinomy = new Machinomy(this._account, this._web3, {
-      engine: 'nedb',
-      databaseFile: this._db,
+      databaseUrl: 'nedb://' + this._db,
       minimumChannelAmount: this._minimumChannelAmount
     })
   }
@@ -216,10 +214,10 @@ class Plugin extends PluginMiniAccounts {
       await this._machinomy.deposit(clientChannel, currentChannel.value)
     }
 
-    const payment = await this._machinomy.nextPayment({
-      receiver: clientChannel,
-      amount: new BigNumber(transferAmount),
-      meta: '' })
+    const {payment} = await this._machinomy.payment({
+      receiver: clientChannel.receiver,
+      price: new BigNumber(transferAmount)
+    })
 
     return [{
       protocolName: 'machinomy',
@@ -232,7 +230,7 @@ class Plugin extends PluginMiniAccounts {
     const account = this._getAccount(from)
     const primary = data.protocolData[0]
     if (primary.protocolName === 'machinomy') {
-      const payment = new Payment(JSON.parse(primary.data.toString()))
+      const payment = JSON.parse(primary.data.toString())
       console.log("GOT PAYMENT", payment)
       await this._machinomy.acceptPayment({ payment })
       const secured = account.getSecuredBalance()
