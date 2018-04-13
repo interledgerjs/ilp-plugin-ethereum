@@ -216,10 +216,10 @@ class Plugin extends PluginMiniAccounts {
       await this._machinomy.deposit(clientChannel, currentChannel.value)
     }
 
-    const payment = await this._machinomy.nextPayment(
-      clientChannel,
-      new BigNumber(transferAmount),
-      '')
+    const payment = await this._machinomy.nextPayment({
+      receiver: clientChannel,
+      amount: new BigNumber(transferAmount),
+      meta: '' })
 
     return [{
       protocolName: 'machinomy',
@@ -234,7 +234,7 @@ class Plugin extends PluginMiniAccounts {
     if (primary.protocolName === 'machinomy') {
       const payment = new Payment(JSON.parse(primary.data.toString()))
       console.log("GOT PAYMENT", payment)
-      await this._machinomy.acceptPayment(payment)
+      await this._machinomy.acceptPayment({ payment })
       const secured = account.getSecuredBalance()
       const newSecured = secured.add(payment.price)
       account.setSecuredBalance(newSecured.toString())
