@@ -14,5 +14,8 @@
     "ilp-plugin-mini-accounts": "^3.1.0",
     "ilp-store-memory": "^1.0.0",
     "machinomy": "1.7.9"
+  },
+  "devDependencies": {
+    "truffle-hdwallet-provider": "0.0.3"
   }
 }
