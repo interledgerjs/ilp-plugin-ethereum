@@ -27,7 +27,10 @@ const plugin = new PluginEthereumAsymServer({
     port: 6666,
     _store: new Store(),
     provider: provider,
-    minimumChannelAmount: '10000'
+    minimumChannelAmount: '10000',
+    debugHostIldcpInfo: {
+        clientAddress: 'test.example'
+    }
 })
 
 plugin.registerDataHandler(packet => {
