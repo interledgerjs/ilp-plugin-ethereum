@@ -241,7 +241,7 @@ class Plugin extends PluginMiniAccounts {
 
       if (newSecured.gte(this._minimumChannelAmount) &&
         !account.getClientChannel()) {
-          const result = await this._machinomy.requireOpenChannel(
+          const result = await this._machinomy.channelManager.requireOpenChannel(
             this._account,
             payment.sender,
             this._minimumChannelAmount)

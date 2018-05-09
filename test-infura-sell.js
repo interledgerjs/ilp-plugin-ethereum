@@ -18,7 +18,7 @@ if (typeof process.env.PROVIDER_URL == 'undefined' || typeof process.env.SECRET 
 console.log('creating provider')
 
 const provider = new HDWalletProvider(process.env.SECRET, process.env.PROVIDER_URL)
-const account = '0x' + provider.address.substring(2).toLowerCase()
+const account = '0x' + provider.getAddress(0).substring(2).toLowerCase()
 console.log('Connecting to local port 6666, settling over Machinomy Ethereum, account:', account)
 
 const plugin = new PluginEthereumAsymServer({

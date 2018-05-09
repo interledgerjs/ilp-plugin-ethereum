@@ -13,9 +13,9 @@
     "debug": "^3.1.0",
     "ilp-plugin-mini-accounts": "^3.1.0",
     "ilp-store-memory": "^1.0.0",
-    "machinomy": "1.7.9"
+    "machinomy": "1.8.1"
   },
   "devDependencies": {
-    "truffle-hdwallet-provider": "0.0.3"
+    "truffle-hdwallet-provider": "https://github.com/machinomy/truffle-hdwallet-provider"
   }
 }
