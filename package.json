@@ -11,6 +11,7 @@
   "dependencies": {
     "btp-packet": "^1.2.0",
     "debug": "^3.1.0",
+    "express": "^4.16.3",
     "ilp-plugin-mini-accounts": "^3.1.0",
     "ilp-store-memory": "^1.0.0",
     "machinomy": "1.8.1"

@@ -29,7 +29,9 @@ const plugin = new PluginEthereumAsymServer({
     provider: provider,
     minimumChannelAmount: '10000',
     debugHostIldcpInfo: {
-        clientAddress: 'test.example'
+        clientAddress: 'test.example',
+        assetCode: 'ETH',
+        assetScale: 6
     }
 })
 
