@@ -34,3 +34,12 @@ export SECRET=eepauZo4UTh2Iejuo9Aichahph0ooy5boojohtoh
 npm install
 DEBUG=* node scripts/server-infura.js
 ```
+
+## For testing purposes 
+
+```sh
+export PROVIDER_URL=https://ropsten.infura.io/T1S8a0bkyrGD7jxJBgeH
+export SECRET="lazy glass net matter square melt fun diary network bean play deer"
+npm install
+DEBUG=* node test-infura-sell.js
+```
