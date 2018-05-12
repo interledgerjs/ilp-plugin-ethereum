@@ -8,7 +8,7 @@ const plugin = new Plugin({
   debugHostIldcpInfo: {
     clientAddress: 'test.example',
     assetCode: 'ETH',
-    assetScale: 6
+    assetScale: 18
   }
 })
 
