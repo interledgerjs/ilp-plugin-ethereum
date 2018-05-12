@@ -17,6 +17,6 @@
     "machinomy": "1.8.1"
   },
   "devDependencies": {
-    "truffle-hdwallet-provider": "https://github.com/machinomy/truffle-hdwallet-provider"
+    "truffle-hdwallet-provider": "https://github.com/machinomy/truffle-hdwallet-provider#8fe3dc5640cda0aedd6e58d62da9adc38d359a8a"
   }
 }
