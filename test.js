@@ -6,7 +6,9 @@ const plugin = new Plugin({
   port: 6666,
   _store: new Store(),
   debugHostIldcpInfo: {
-    clientAddress: 'test.example'
+    clientAddress: 'test.example',
+    assetCode: 'ETH',
+    assetScale: 18
   }
 })
 

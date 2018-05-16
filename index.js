@@ -6,7 +6,6 @@ const BtpPacket = require('btp-packet')
 const BigNumber = require('bignumber.js')
 const Web3 = require('web3')
 const Machinomy = require('machinomy').default
-const Payment = require('machinomy/dist/lib/payment').default
 const PluginMiniAccounts = require('ilp-plugin-mini-accounts')
 const StoreWrapper = require('./src/store-wrapper')
 const Account = require('./src/account')
@@ -215,10 +214,10 @@ class Plugin extends PluginMiniAccounts {
       await this._machinomy.deposit(clientChannel, currentChannel.value)
     }
 
-    const payment = await this._machinomy.nextPayment(
-      clientChannel,
-      new BigNumber(transferAmount),
-      '')
+    const {payment} = await this._machinomy.payment({
+      receiver: clientChannel.receiver,
+      price: new BigNumber(transferAmount)
+    })
 
     return [{
       protocolName: 'machinomy',
@@ -231,9 +230,9 @@ class Plugin extends PluginMiniAccounts {
     const account = this._getAccount(from)
     const primary = data.protocolData[0]
     if (primary.protocolName === 'machinomy') {
-      const payment = new Payment(JSON.parse(primary.data.toString()))
+      const payment = JSON.parse(primary.data.toString())
       console.log("GOT PAYMENT", payment)
-      await this._machinomy.acceptPayment(payment)
+      await this._machinomy.acceptPayment({ payment })
       const secured = account.getSecuredBalance()
       const newSecured = secured.add(payment.price)
       account.setSecuredBalance(newSecured.toString())
@@ -242,7 +241,7 @@ class Plugin extends PluginMiniAccounts {
 
       if (newSecured.gte(this._minimumChannelAmount) &&
         !account.getClientChannel()) {
-          const result = await this._machinomy.requireOpenChannel(
+          const result = await this._machinomy.channelManager.requireOpenChannel(
             this._account,
             payment.sender,
             this._minimumChannelAmount)

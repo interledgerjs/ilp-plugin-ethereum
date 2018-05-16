@@ -11,9 +11,12 @@
   "dependencies": {
     "btp-packet": "^1.2.0",
     "debug": "^3.1.0",
+    "express": "^4.16.3",
     "ilp-plugin-mini-accounts": "^3.1.0",
     "ilp-store-memory": "^1.0.0",
-    "machinomy": "^1.6.1",
-    "web3": "0.20.2"
+    "machinomy": "1.8.1"
+  },
+  "devDependencies": {
+    "truffle-hdwallet-provider": "https://github.com/machinomy/truffle-hdwallet-provider#8fe3dc5640cda0aedd6e58d62da9adc38d359a8a"
   }
 }

@@ -28,16 +28,18 @@ logic for you.
 
 ## Usage
 
-You must have a local ethereum provider running in order to use this plugin.
-The Machinomy contracts must be deployed on the chain that you connect to.
+```sh
+export RINKEBY_PROVIDER_URL=https://rinkeby.infura.io/2LQpDUsVeDqOZ8hvLzti
+export SECRET=eepauZo4UTh2Iejuo9Aichahph0ooy5boojohtoh
+npm install
+DEBUG=* node scripts/server-infura.js
+```
 
-```js
-new PluginEthereumAsymServer({
-  account: '0x....', // Your ethereum account
-  db: 'machinomy_db', // The db file created by machinomy
-  port: 6666, // port to listen for incoming connections on
-  _store: new Store(), // store for ILP balance and account info
-  provider: 'http://localhost:8545', // ethereum provider 
-  minimumChannelAmount: '10000', // amount with which to fund the channel
-})
+## For testing purposes 
+
+```sh
+export PROVIDER_URL=https://ropsten.infura.io/T1S8a0bkyrGD7jxJBgeH
+export SECRET="lazy glass net matter square melt fun diary network bean play deer"
+npm install
+DEBUG=* node test-infura-sell.js
 ```
