@@ -175,6 +175,11 @@ class Plugin extends PluginMiniAccounts {
             fulfillment=${parsedResponse.data.fulfillment}`)
       }
 
+      // Don't bother sending channel updates for 0 amounts
+      if (new BigNumber(preparePacket.data.amount).eq(0)) {
+        return;
+      }
+
       // send off a transfer in the background to settle
       _requestId()
         .then(async requestId => {
