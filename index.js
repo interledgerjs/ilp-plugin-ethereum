@@ -88,16 +88,16 @@ class Plugin extends PluginMiniAccounts {
       }]
     } else if (protocolMap.ilp) {
       let response = await Promise.race([
-        this._dataHandler(ilp.data),
-        this._expireData(account, ilp.data)
+        this._dataHandler(ilp),
+        this._expireData(account, ilp)
       ])
 
-      if (ilp.data[0] === IlpPacket.Type.TYPE_ILP_PREPARE) {
+      if (ilp[0] === IlpPacket.Type.TYPE_ILP_PREPARE) {
         if (response[0] === IlpPacket.Type.TYPE_ILP_REJECT) {
-          this._rejectIncomingTransfer(account, ilp.data)
+          this._rejectIncomingTransfer(account, ilp)
         } else if (response[0] === IlpPacket.Type.TYPE_ILP_FULFILL) {
           // TODO: should await, or no?
-          const { amount } = IlpPacket.deserializeIlpPrepare(ilp.data)
+          const { amount } = IlpPacket.deserializeIlpPrepare(ilp)
           if (amount !== '0' && this._moneyHandler) this._moneyHandler(amount)
         }
       }
