@@ -204,20 +204,20 @@ class Plugin extends PluginMiniAccounts {
 
   async _sendMoneyToAccount (transferAmount, to) {
     const account = this._getAccount(to)
-    const clientChannel = account.getClientChannel()
-    if (!clientChannel) {
+    const clientChannelId = account.getClientChannel()
+    if (!clientChannelId) {
       throw new Error('client channel has not yet been funded.')
     }
 
     const channels = await this._machinomy.channels()
     const currentChannel = channels
-      .filter(c => c.channelId === clientChannel)[0]
+      .filter(c => c.channelId === clientChannelId)[0]
 
     if (currentChannel.spent.add(transferAmount).gte(currentChannel.value)) {
       // TODO: do this pre-emptively and asynchronously
       console.log('channel:', currentChannel)
       debug('funding channel for', currentChannel.value.toString())
-      await this._machinomy.deposit(clientChannel, currentChannel.value)
+      await this._machinomy.deposit(clientChannelId, currentChannel.value)
     }
 
     const {payment} = await this._machinomy.payment({
