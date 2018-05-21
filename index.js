@@ -221,7 +221,7 @@ class Plugin extends PluginMiniAccounts {
     }
 
     const {payment} = await this._machinomy.payment({
-      receiver: clientChannel.receiver,
+      receiver: currentChannel.receiver,
       price: new BigNumber(transferAmount)
     })
 
