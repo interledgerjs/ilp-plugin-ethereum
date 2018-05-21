@@ -10,6 +10,8 @@ const PluginMiniAccounts = require('ilp-plugin-mini-accounts')
 const StoreWrapper = require('./src/store-wrapper')
 const Account = require('./src/account')
 
+const DEFAULT_TIMEOUT = 30000
+
 async function _requestId () {
   return new Promise((resolve, reject) => {
     crypto.randomBytes(4, (err, buf) => {
