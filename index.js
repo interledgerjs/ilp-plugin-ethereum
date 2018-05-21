@@ -1,7 +1,7 @@
 'use strict'
 const crypto = require('crypto')
 const IlpPacket = require('ilp-packet')
-const debug = require('debug')('ilp-plugin-ethereum-asym-client')
+const debug = require('debug')('ilp-plugin-ethereum-asym-server')
 const BtpPacket = require('btp-packet')
 const BigNumber = require('bignumber.js')
 const Web3 = require('web3')
