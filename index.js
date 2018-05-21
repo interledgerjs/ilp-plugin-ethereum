@@ -29,6 +29,7 @@ class Plugin extends PluginMiniAccounts {
     this._web3 = new Web3(typeof this._provider === 'string'
       ? new Web3.providers.HttpProvider(this._provider)
       : this._provider)
+    this._timeout = opts.timeout || DEFAULT_TIMEOUT
 
     this._bandwidth = 0
     this._store = new StoreWrapper(opts._store)
@@ -109,7 +110,7 @@ class Plugin extends PluginMiniAccounts {
     const isPrepare = ilpData[0] === IlpPacket.Type.TYPE_ILP_PREPARE
     const expiresAt = isPrepare
       ? IlpPacket.deserializeIlpPrepare(ilpData).expiresAt
-      : new Date(Date.now() + DEFAULT_TIMEOUT) // TODO: other timeout as default?
+      : new Date(Date.now() + this._timeout)
 
     await new Promise((resolve) => setTimeout(resolve, expiresAt - Date.now()))
     return isPrepare
@@ -126,7 +127,7 @@ class Plugin extends PluginMiniAccounts {
         forwardedBy: [],
         triggeredAt: new Date(),
         data: JSON.stringify({
-          message: `request timed out after ${DEFAULT_TIMEOUT} ms`
+          message: `request timed out after ${this._timeout} ms`
         })
       })
   }
