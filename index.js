@@ -239,7 +239,6 @@ class Plugin extends PluginMiniAccounts {
     const primary = data.protocolData[0]
     if (primary.protocolName === 'machinomy') {
       const payment = JSON.parse(primary.data.toString())
-      console.log('GOT PAYMENT', payment)
       await this._machinomy.acceptPayment({ payment })
       const secured = account.getSecuredBalance()
       const newSecured = secured.add(payment.price)
