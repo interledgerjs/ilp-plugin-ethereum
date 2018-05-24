@@ -1,7 +1,7 @@
 'use strict'
 const crypto = require('crypto')
 const IlpPacket = require('ilp-packet')
-const debug = require('debug')('ilp-plugin-ethereum-asym-client')
+const debug = require('debug')('ilp-plugin-ethereum-asym-server')
 const BtpPacket = require('btp-packet')
 const BigNumber = require('bignumber.js')
 const Web3 = require('web3')
@@ -9,6 +9,8 @@ const Machinomy = require('machinomy').default
 const PluginMiniAccounts = require('ilp-plugin-mini-accounts')
 const StoreWrapper = require('./src/store-wrapper')
 const Account = require('./src/account')
+
+const DEFAULT_TIMEOUT = 30000
 
 async function _requestId () {
   return new Promise((resolve, reject) => {
@@ -29,6 +31,7 @@ class Plugin extends PluginMiniAccounts {
     this._web3 = new Web3(typeof this._provider === 'string'
       ? new Web3.providers.HttpProvider(this._provider)
       : this._provider)
+    this._timeout = opts.timeout || DEFAULT_TIMEOUT
 
     this._bandwidth = 0
     this._store = new StoreWrapper(opts._store)
@@ -87,16 +90,16 @@ class Plugin extends PluginMiniAccounts {
       }]
     } else if (protocolMap.ilp) {
       let response = await Promise.race([
-        this._dataHandler(ilp.data),
-        this._expireData(account, ilp.data)
+        this._dataHandler(ilp),
+        this._expireData(account, ilp)
       ])
 
-      if (ilp.data[0] === IlpPacket.Type.TYPE_ILP_PREPARE) {
+      if (ilp[0] === IlpPacket.Type.TYPE_ILP_PREPARE) {
         if (response[0] === IlpPacket.Type.TYPE_ILP_REJECT) {
-          this._rejectIncomingTransfer(account, ilp.data)
+          this._rejectIncomingTransfer(account, ilp)
         } else if (response[0] === IlpPacket.Type.TYPE_ILP_FULFILL) {
           // TODO: should await, or no?
-          const { amount } = IlpPacket.deserializeIlpPrepare(ilp.data)
+          const { amount } = IlpPacket.deserializeIlpPrepare(ilp)
           if (amount !== '0' && this._moneyHandler) this._moneyHandler(amount)
         }
       }
@@ -109,7 +112,7 @@ class Plugin extends PluginMiniAccounts {
     const isPrepare = ilpData[0] === IlpPacket.Type.TYPE_ILP_PREPARE
     const expiresAt = isPrepare
       ? IlpPacket.deserializeIlpPrepare(ilpData).expiresAt
-      : new Date(Date.now() + DEFAULT_TIMEOUT) // TODO: other timeout as default?
+      : new Date(Date.now() + this._timeout)
 
     await new Promise((resolve) => setTimeout(resolve, expiresAt - Date.now()))
     return isPrepare
@@ -126,7 +129,7 @@ class Plugin extends PluginMiniAccounts {
         forwardedBy: [],
         triggeredAt: new Date(),
         data: JSON.stringify({
-          message: `request timed out after ${DEFAULT_TIMEOUT} ms`
+          message: `request timed out after ${this._timeout} ms`
         })
       })
   }
@@ -174,6 +177,11 @@ class Plugin extends PluginMiniAccounts {
             fulfillment=${parsedResponse.data.fulfillment}`)
       }
 
+      // Don't bother sending channel updates for 0 amounts
+      if (new BigNumber(preparePacket.data.amount).eq(0)) {
+        return;
+      }
+
       // send off a transfer in the background to settle
       _requestId()
         .then(async requestId => {
@@ -198,24 +206,24 @@ class Plugin extends PluginMiniAccounts {
 
   async _sendMoneyToAccount (transferAmount, to) {
     const account = this._getAccount(to)
-    const clientChannel = account.getClientChannel()
-    if (!clientChannel) {
+    const clientChannelId = account.getClientChannel()
+    if (!clientChannelId) {
       throw new Error('client channel has not yet been funded.')
     }
 
     const channels = await this._machinomy.channels()
     const currentChannel = channels
-      .filter(c => c.channelId === clientChannel)[0]
+      .filter(c => c.channelId === clientChannelId)[0]
 
     if (currentChannel.spent.add(transferAmount).gte(currentChannel.value)) {
       // TODO: do this pre-emptively and asynchronously
       console.log('channel:', currentChannel)
       debug('funding channel for', currentChannel.value.toString())
-      await this._machinomy.deposit(clientChannel, currentChannel.value)
+      await this._machinomy.deposit(clientChannelId, currentChannel.value)
     }
 
     const {payment} = await this._machinomy.payment({
-      receiver: clientChannel.receiver,
+      receiver: currentChannel.receiver,
       price: new BigNumber(transferAmount)
     })
 
@@ -231,7 +239,6 @@ class Plugin extends PluginMiniAccounts {
     const primary = data.protocolData[0]
     if (primary.protocolName === 'machinomy') {
       const payment = JSON.parse(primary.data.toString())
-      console.log("GOT PAYMENT", payment)
       await this._machinomy.acceptPayment({ payment })
       const secured = account.getSecuredBalance()
       const newSecured = secured.add(payment.price)
