@@ -142,7 +142,7 @@ class Plugin extends PluginMiniAccounts {
     const newPrepared = prepared.add(amount)
     const unsecured = newPrepared.sub(secured)
     debug(unsecured.toString(), 'unsecured; secured balance is',
-      lastValue.toString(), 'prepared amount', amount, 'newPrepared',
+      secured.toString(), 'prepared amount', amount, 'newPrepared',
       newPrepared.toString(), 'prepared', prepared.toString())
 
     if (unsecured.greaterThan(this._bandwidth)) {
@@ -170,8 +170,8 @@ class Plugin extends PluginMiniAccounts {
         .update(parsedResponse.data.fulfillment)
         .digest()
         .equals(preparePacket.data.executionCondition)) {
-          // TODO: could this leak data if the fulfillment is wrong in
-          // a predictable way?
+        // TODO: could this leak data if the fulfillment is wrong in
+        // a predictable way?
         throw new Error(`condition and fulfillment don't match.
             condition=${preparePacket.data.executionCondition}
             fulfillment=${parsedResponse.data.fulfillment}`)
@@ -179,7 +179,7 @@ class Plugin extends PluginMiniAccounts {
 
       // Don't bother sending channel updates for 0 amounts
       if (new BigNumber(preparePacket.data.amount).eq(0)) {
-        return;
+        return
       }
 
       // send off a transfer in the background to settle
@@ -248,11 +248,11 @@ class Plugin extends PluginMiniAccounts {
 
       if (newSecured.gte(this._minimumChannelAmount) &&
         !account.getClientChannel()) {
-          const result = await this._machinomy.channelManager.requireOpenChannel(
-            this._account,
-            payment.sender,
-            this._minimumChannelAmount)
-          account.setClientChannel(result.channelId)
+        const result = await this._machinomy.channelManager.requireOpenChannel(
+          this._account,
+          payment.sender,
+          this._minimumChannelAmount)
+        account.setClientChannel(result.channelId)
       }
     }
   }
