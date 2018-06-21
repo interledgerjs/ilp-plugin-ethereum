@@ -10,6 +10,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "bignumber.js": "^4.1.0",
     "btp-packet": "^1.2.0",
     "debug": "^3.1.0",
     "express": "^4.16.3",

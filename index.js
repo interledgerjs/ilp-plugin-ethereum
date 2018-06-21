@@ -176,9 +176,10 @@ class Plugin extends PluginMiniAccounts {
             condition=${preparePacket.data.executionCondition}
             fulfillment=${parsedResponse.data.fulfillment}`)
       }
-
+      
       // Don't bother sending channel updates for 0 amounts
-      if (new BigNumber(preparePacket.data.amount).eq(0)) {
+      const amount = new BigNumber(preparePacket.data.amount)
+      if (amount.eq(0)) {
         return
       }
 
@@ -189,10 +190,11 @@ class Plugin extends PluginMiniAccounts {
             type: BtpPacket.TYPE_TRANSFER,
             requestId,
             data: {
-              amount: preparePacket.data.amount,
+              amount,
               protocolData: await this._sendMoneyToAccount(
-                preparePacket.data.amount,
-                destination)
+                amount,
+                destination
+              )
             }
           })
         })
@@ -204,27 +206,28 @@ class Plugin extends PluginMiniAccounts {
     }
   }
 
-  async _sendMoneyToAccount (transferAmount, to) {
+  async _sendMoneyToAccount (amount, to) {
     const account = this._getAccount(to)
     const clientChannelId = account.getClientChannel()
     if (!clientChannelId) {
       throw new Error('client channel has not yet been funded.')
     }
-
+    
     const channels = await this._machinomy.channels()
     const currentChannel = channels
       .filter(c => c.channelId === clientChannelId)[0]
-
-    if (currentChannel.spent.add(transferAmount).gte(currentChannel.value)) {
-      // TODO: do this pre-emptively and asynchronously
-      console.log('channel:', currentChannel)
-      debug('funding channel for', currentChannel.value.toString())
-      await this._machinomy.deposit(clientChannelId, currentChannel.value)
+    
+    // Deposit enough to the existing channel to cover the payment instead of opening a new one
+    const depositAmount = amount.plus(currentChannel.spent).minus(currentChannel.value)
+    if (depositAmount.gt(0)) {
+      debug('funding channel for', depositAmount.toString())
+      await this._machinomy.deposit(clientChannelId, depositAmount)
     }
 
+    // If a channel is sufficiently funded, Machinomy uses that; if not, it opens a new one
     const {payment} = await this._machinomy.payment({
       receiver: currentChannel.receiver,
-      price: new BigNumber(transferAmount)
+      price: amount
     })
 
     return [{
@@ -237,6 +240,7 @@ class Plugin extends PluginMiniAccounts {
   async _handleMoney (from, { requestId, data }) {
     const account = this._getAccount(from)
     const primary = data.protocolData[0]
+    
     if (primary.protocolName === 'machinomy') {
       const payment = JSON.parse(primary.data.toString())
       await this._machinomy.acceptPayment({ payment })
