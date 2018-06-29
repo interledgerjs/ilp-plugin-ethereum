@@ -3,12 +3,12 @@ const crypto = require('crypto')
 const IlpPacket = require('ilp-packet')
 const debug = require('debug')('ilp-plugin-ethereum-asym-server')
 const BtpPacket = require('btp-packet')
-const BigNumber = require('bignumber.js')
 const Web3 = require('web3')
 const Machinomy = require('machinomy').default
 const PluginMiniAccounts = require('ilp-plugin-mini-accounts')
 const StoreWrapper = require('./src/store-wrapper')
 const Account = require('./src/account')
+const EthUnit = require('./src/unit')
 
 const DEFAULT_TIMEOUT = 30000
 
@@ -27,16 +27,13 @@ class Plugin extends PluginMiniAccounts {
     this._account = opts.account
     this._db = opts.db || 'machinomy_db'
     this._provider = opts.provider || 'http://localhost:8545'
-    this._minimumChannelAmount = new BigNumber(opts.minimumChannelAmount || 100)
+    this._minimumChannelAmount = new EthUnit(opts.minimumChannelAmount || 1, 'gwei')
     this._web3 = new Web3(typeof this._provider === 'string'
       ? new Web3.providers.HttpProvider(this._provider)
       : this._provider)
     this._timeout = opts.timeout || DEFAULT_TIMEOUT
 
-    this._bandwidth = 0
     this._store = new StoreWrapper(opts._store)
-
-    this._channelToAccount = new Map()
     this._accounts = new Map()
   }
 
@@ -55,19 +52,10 @@ class Plugin extends PluginMiniAccounts {
     return account
   }
 
-  _extraInfo (account) {
-    return {
-      ethereumAccount: this._account,
-      account: this._prefix + account.getAccount(),
-      minimumChannelAmount: this._minimumChannelAmount,
-      clientChannel: account.getClientChannel()
-    }
-  }
-
   async _preConnect () {
     this._machinomy = new Machinomy(this._account, this._web3, {
       databaseUrl: 'nedb://' + this._db,
-      minimumChannelAmount: this._minimumChannelAmount
+      minimumChannelAmount: this._minimumChannelAmount.wei()
     })
   }
 
@@ -86,9 +74,18 @@ class Plugin extends PluginMiniAccounts {
       return [{
         protocolName: 'info',
         contentType: BtpPacket.MIME_APPLICATION_JSON,
-        data: Buffer.from(JSON.stringify(this._extraInfo(account)))
+        data: Buffer.from(JSON.stringify({
+          ethereumAccount: this._account,
+          account: this._prefix + account.getAccount(),
+          minimumChannelAmount: this._minimumChannelAmount,
+          clientChannel: account.getClientChannel()
+        }))
       }]
     } else if (protocolMap.ilp) {
+      if (!this._dataHandler) {
+        throw new Error('no request handler registered')
+      }
+
       let response = await Promise.race([
         this._dataHandler(ilp),
         this._expireData(account, ilp)
@@ -100,7 +97,14 @@ class Plugin extends PluginMiniAccounts {
         } else if (response[0] === IlpPacket.Type.TYPE_ILP_FULFILL) {
           // TODO: should await, or no?
           const { amount } = IlpPacket.deserializeIlpPrepare(ilp)
-          if (amount !== '0' && this._moneyHandler) this._moneyHandler(amount)
+
+          if (!this._moneyHandler) {
+            throw new Error('no money handler registered')
+          }
+
+          if (amount !== '0') {
+            this._moneyHandler(amount)
+          }
         }
       }
 
@@ -135,23 +139,23 @@ class Plugin extends PluginMiniAccounts {
   }
 
   _handleIncomingPrepare (account, ilpData) {
-    const { amount } = IlpPacket.deserializeIlpPrepare(ilpData)
+    const amount = new EthUnit(
+      IlpPacket.deserializeIlpPrepare(ilpData).amount,
+      'gwei'
+    )
 
     const secured = account.getSecuredBalance()
     const prepared = account.getBalance()
     const newPrepared = prepared.add(amount)
     const unsecured = newPrepared.sub(secured)
-    debug(unsecured.toString(), 'unsecured; secured balance is',
-      secured.toString(), 'prepared amount', amount, 'newPrepared',
-      newPrepared.toString(), 'prepared', prepared.toString())
 
-    if (unsecured.greaterThan(this._bandwidth)) {
-      throw new Error('Insufficient bandwidth, used: ' + unsecured + ' max: ' +
-        this._bandwidth)
-    }
+    // TODO: Fix this !
+    debug(unsecured.ethStr(), 'unsecured; secured balance is',
+      secured.ethStr(), 'prepared amount', amount, 'newPrepared',
+      newPrepared.ethStr(), 'prepared', prepared.ethStr())
 
     account.setBalance(newPrepared.toString())
-    debug(`account ${account.getAccount()} debited ${amount} units, new balance ${newPrepared.toString()}`)
+    debug(`account ${account.getAccount()} debited ${amount.ethStr()} gwei, new balance ${newPrepared.ethStr()}`)
   }
 
   _rejectIncomingTransfer (account, ilpData) {
@@ -159,7 +163,7 @@ class Plugin extends PluginMiniAccounts {
     const prepared = account.getBalance()
     const newPrepared = prepared.sub(amount)
 
-    account.setBalance(newPrepared.toString())
+    account.setBalance(newPrepared)
     debug(`account ${account.getAccount()} roll back ${amount} units, new balance ${newPrepared.toString()}`)
   }
 
@@ -178,7 +182,7 @@ class Plugin extends PluginMiniAccounts {
       }
 
       // Don't bother sending channel updates for 0 amounts
-      const amount = new BigNumber(preparePacket.data.amount)
+      const amount = new EthUnit(preparePacket.data.amount, 'gwei')
       if (amount.eq(0)) {
         return
       }
@@ -207,6 +211,8 @@ class Plugin extends PluginMiniAccounts {
   }
 
   async _sendMoneyToAccount (amount, to) {
+    const price = new EthUnit(amount, 'gwei').wei()
+
     const account = this._getAccount(to)
     const clientChannelId = account.getClientChannel()
     if (!clientChannelId) {
@@ -218,16 +224,19 @@ class Plugin extends PluginMiniAccounts {
       .filter(c => c.channelId === clientChannelId)[0]
 
     // Deposit enough to the existing channel to cover the payment instead of opening a new one
-    const depositAmount = amount.plus(currentChannel.spent).minus(currentChannel.value)
+    const depositAmount = new EthUnit(
+      price.plus(currentChannel.spent).minus(currentChannel.value),
+      'wei'
+    )
     if (depositAmount.gt(0)) {
-      debug('funding channel for', depositAmount.toString())
+      debug('funding channel for', depositAmount.ethStr())
       await this._machinomy.deposit(clientChannelId, depositAmount)
     }
 
     // If a channel is sufficiently funded, Machinomy uses that; if not, it opens a new one
     const {payment} = await this._machinomy.payment({
       receiver: currentChannel.receiver,
-      price: amount
+      price
     })
 
     return [{
@@ -244,18 +253,22 @@ class Plugin extends PluginMiniAccounts {
     if (primary.protocolName === 'machinomy') {
       const payment = JSON.parse(primary.data.toString())
       await this._machinomy.acceptPayment({ payment })
-      const secured = account.getSecuredBalance()
-      const newSecured = secured.add(payment.price)
-      account.setSecuredBalance(newSecured.toString())
-      debug('got money. secured=' + secured.toString(),
-        'new=' + newSecured.toString())
 
-      if (newSecured.gte(this._minimumChannelAmount) &&
+      const secured = account.getSecuredBalance()
+      const newSecured = new EthUnit(payment.price, 'gwei')
+      const totalSecured = new EthUnit(secured.add(newSecured), 'gwei')
+      account.setSecuredBalance(totalSecured)
+
+      debug('got payment for', newSecured.ethStr(),
+        ', total secured is now', totalSecured.ethStr())
+
+      if (totalSecured.gte(this._minimumChannelAmount) &&
         !account.getClientChannel()) {
         const result = await this._machinomy.channelManager.requireOpenChannel(
           this._account,
           payment.sender,
-          this._minimumChannelAmount)
+          this._minimumChannelAmount.wei()
+        )
         account.setClientChannel(result.channelId)
       }
     }
