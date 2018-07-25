@@ -1,25 +1,40 @@
 {
   "name": "ilp-plugin-ethereum-asym-server",
   "version": "1.2.2",
-  "description": "",
-  "main": "index.js",
+  "description": "Asymmetric Ethereum paychan server for ILP using Machinomy",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "lint": "standard"
+    "build": "npm run compile-ts",
+    "compile-ts": "tsc --project .",
+    "lint": "tslint --project .",
+    "pretest": "npm run build",
+    "postinstall": "npm run build",
+    "test": "jest"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
     "bignumber.js": "^4.1.0",
-    "btp-packet": "^1.2.0",
-    "debug": "^3.1.0",
-    "express": "^4.16.3",
-    "ilp-plugin-mini-accounts": "^3.1.0",
-    "ilp-store-memory": "^1.0.0",
-    "machinomy": "1.8.1"
+    "btp-packet": "^1.2.1",
+    "ilp-logger": "^1.0.1",
+    "ilp-packet": "^2.2.0",
+    "ilp-plugin-mini-accounts": "^3.5.0",
+    "machinomy": "^1.12.0"
   },
   "devDependencies": {
+    "@machinomy/types-truffle-hdwallet-provider": "0.0.2",
+    "@types/jest": "^23.3.0",
+    "@types/request": "^2.47.1",
+    "ganache-cli": "^6.1.6",
+    "jest": "^23.4.1",
+    "source-map-support": "^0.5.6",
     "standard": "^11.0.1",
-    "truffle-hdwallet-provider": "https://github.com/machinomy/truffle-hdwallet-provider#8fe3dc5640cda0aedd6e58d62da9adc38d359a8a"
+    "truffle-hdwallet-provider": "https://github.com/machinomy/truffle-hdwallet-provider#8fe3dc5640cda0aedd6e58d62da9adc38d359a8a",
+    "ts-jest": "^23.0.1",
+    "ts-node": "^7.0.0",
+    "tslint": "^5.10.0",
+    "tslint-config-standard": "^7.1.0",
+    "typescript": "^2.9.2"
   }
 }
