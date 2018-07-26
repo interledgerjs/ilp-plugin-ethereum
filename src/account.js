@@ -1,6 +1,6 @@
 'use strict'
 
-const BigNumber = require('bignumber.js')
+const EthUnit = require('./unit')
 
 const BALANCE = a => a
 const SECURED_BALANCE = a => a + ':secured_balance'
@@ -32,7 +32,7 @@ class Account {
   }
 
   getBalance () {
-    return new BigNumber(this._store.get(BALANCE(this._account)) || '0')
+    return new EthUnit(this._store.get(BALANCE(this._account)) || '0', 'gwei')
   }
 
   setBalance (balance) {
@@ -40,7 +40,7 @@ class Account {
   }
 
   getSecuredBalance () {
-    return new BigNumber(this._store.get(SECURED_BALANCE(this._account)) || '0')
+    return new EthUnit(this._store.get(SECURED_BALANCE(this._account)) || '0', 'gwei')
   }
 
   setSecuredBalance (balance) {
