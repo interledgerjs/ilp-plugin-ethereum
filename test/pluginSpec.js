@@ -18,6 +18,8 @@ describe('pluginSpec', () => {
 
   describe('constructor', function () {
     it('should throw if currencyScale is neither undefined nor a number', function () {
+      assert.throws(() => createPlugin({ currencyScale: 'oaimwdaiowdoamwdaoiw' }),
+        /currency scale must be a number if specified/)
     })
   })
 
