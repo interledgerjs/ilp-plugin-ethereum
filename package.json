@@ -2,7 +2,7 @@
   "name": "ilp-plugin-ethereum-asym-server",
   "version": "1.2.2",
   "description": "Asymmetric Ethereum paychan server for ILP using Machinomy",
-  "main": "build/index.js",
+  "main": "index.js",
   "types": "build/index.d.ts",
   "scripts": {
     "build": "npm run compile-ts",
