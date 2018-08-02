@@ -6,11 +6,20 @@ const HDWalletProvider = require('truffle-hdwallet-provider')
 
 const SECRET = "lazy glass net matter square melt fun diary network bean play deer"
 const PROVIDER_URL = "https://ropsten.infura.io/T1S8a0bkyrGD7jxJBgeH"
-    console.log(new HDWalletProvider(SECRET, PROVIDER_URL, 0).getAddress())
 
 function createPlugin(opts = {}) {
   return new PluginEthAsymServer(Object.assign({
-    provider: () => new HDWalletProvider(SECRET, PROVIDER_URL)
+    prefix: 'test.example',
+    provider: () => new HDWalletProvider(SECRET, PROVIDER_URL, 0),
+    account: '0xad217fb704030c8465682c3b1a6ac3ed56bff8ab',
+    minimumChannelAmount: 1000000,
+    maxPacketAmount: 1000000, 
+    _store: new Store(null, 'test.example'),
+    debugHostIldcpInfo: {
+      clientAddress: 'test.example',
+      assetScale: 9,
+      assetCode: 'ETH'
+    }
   }, opts))
 }
 
