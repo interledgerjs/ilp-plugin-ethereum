@@ -1,8 +1,7 @@
 'use strict'
 
 class MemStore {
-  constructor (uri, name) {
-    this.name = name
+  constructor () {
     this.store = {}
   }
 
