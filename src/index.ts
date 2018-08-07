@@ -124,6 +124,9 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
   }
 
   // Calculate a transaction fee in gwei based on the operation and network gas price
+  // FIX: convert gas price from wei to gwei
+  // TODO should these be the gas limit?
+  // TODO or could we use estimateGas?
   async _estimateFee (txType: 'open' | 'deposit' | 'claim') {
     const gasUsage = {
       open: 114676,
@@ -131,10 +134,13 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
       claim: 40478
     }
 
-    const gasPrice = await promisify(this._web3.eth.getGasPrice)()
-    return gasPrice.times(gasUsage[txType])
+    const getGasPrice = promisify(this._web3.eth.getGasPrice)
+    const gasPriceInGwei = this._web3.fromWei(await getGasPrice(), 'gwei')
+    return gasPriceInGwei.times(gasUsage[txType])
   }
 
+  // FIX: anonymous function to fix `this` context, assign new value to obj
+  // FIX: assign new property in set trap
   _getAccount (address: string) {
     const accountName = this.ilpAddressToAccount(address)
     let account = this._accounts.get(accountName)
@@ -147,7 +153,8 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
         accountName,
         balance: new BigNumber(0)
       }, {
-        set (obj, prop, val) {
+        set: (obj, prop, val) => {
+          obj[prop] = val
           this._store.set(accountName, JSON.stringify(obj))
           return Reflect.set(obj, prop, val)
         }
@@ -166,7 +173,6 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
       minimumSettlementPeriod: this._minimumSettlementPeriod,
       minimumChannelAmount: this._minimumChannelAmount || (await this._estimateFee('claim')).times(5)
     })
-
     this._startWatcher()
   }
 
@@ -180,7 +186,8 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
       ...account,
       ...await this._store.loadObject(account.accountName)
     }, {
-      set (obj, prop, val) {
+      set: (obj, prop, val) => {
+        obj[prop] = val
         this._store.set(account.accountName, JSON.stringify(obj))
         return Reflect.set(obj, prop, val)
       }
@@ -193,6 +200,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
     }
 
     // Only a single Ethereum address can be linked to an account, for the lifetime of the account
+    // TODO a single payment channel at a given address?
     if (!account.ethereumAddress) {
       // Resolve the Ethereum address the client wants to be paid at
       const infoResponse = await this._call(address, {
@@ -216,6 +224,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
   }
 
   // Called by ilp-plugin-btp when a type MESSAGE BTP packet is received
+  // TODO no, it's called by mini accounts
   _handleCustomData = async (from: string, message: BtpPacket) => {
     const account = this._getAccount(from)
 
@@ -236,9 +245,12 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
     // Handle ILP PREPARE packets
     // Any response packets (FULFILL or REJECT) should come from data handler response,
     // not wrapped in a BTP message (connector/data handler would throw an error anyways?)
+    // TODO check if payment channel exists? What if peer does not have
+    // enough money in the channel? Or if there is no channel? Could employ
+    // similar logic to xrp asym server. Deposit 10xrp, along with a channel
+    // protocol transmitting channel details?
     if (ilp && ilp.data[0] === IlpPacket.Type.TYPE_ILP_PREPARE) {
       const { amount, expiresAt } = IlpPacket.deserializeIlpPrepare(ilp.data)
-
       if (account.isBlocked) {
         throw new IlpPacket.Errors.UnreachableError('Account has been closed.')
       }
@@ -282,6 +294,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
         })
       ])
 
+      // TODO allow negative payment?
       if (response[0] === IlpPacket.Type.TYPE_ILP_REJECT) {
         account.balance = account.balance.minus(amount)
         this._log.trace(`Account ${account.accountName} roll back ${formatAmount(amount, 'eth')}, new balance ${formatAmount(account.balance, 'eth')}`)
@@ -305,6 +318,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
 
   // After calling sendData on the plugin, this is called first
   // Errors should throw ILP packets (prior to any await/Promise is returned)
+  // TODO: again, should we be able to send a prepare without a payment channel?
   _sendPrepare (destination: string, preparePacket: IlpPacket.IlpPacket) {
     const account = this._getAccount(destination)
 
@@ -530,6 +544,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
       for (let c of channels) {
         for (let [, account] of this._accounts) {
           if (c.channelId === account.incomingChannelId) {
+            // TODO account not actually being blocked?
             this._log.info(`Account ${account.accountName} is now blocked for attempting to clear our funds from channel.`)
           }
         }
