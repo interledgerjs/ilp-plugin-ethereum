@@ -13,7 +13,9 @@ const MiniAccountsPlugin = require('ilp-plugin-mini-accounts')
 import createLogger = require('ilp-logger')
 const BtpPacket = require('btp-packet')
 
-class Trace extends Error {}
+class Trace extends Error {
+  name: string = 'Trace'
+}
 
 interface Account {
   // Is the server currently opening a channel/depositing to the client?
@@ -124,7 +126,6 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
   }
 
   // Calculate a transaction fee in gwei based on the operation and network gas price
-  // FIX: convert gas price from wei to gwei
   // TODO should these be the gas limit?
   // TODO or could we use estimateGas?
   async _estimateFee (txType: 'open' | 'deposit' | 'claim') {
@@ -139,8 +140,6 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
     return gasPriceInGwei.times(gasUsage[txType])
   }
 
-  // FIX: anonymous function to fix `this` context, assign new value to obj
-  // FIX: assign new property in set trap
   _getAccount (address: string) {
     const accountName = this.ilpAddressToAccount(address)
     let account = this._accounts.get(accountName)
@@ -198,9 +197,8 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
     if (account.isBlocked) {
       throw new Error(`Cannot connect to blocked account ${account.accountName}`)
     }
-
+ 
     // Only a single Ethereum address can be linked to an account, for the lifetime of the account
-    // TODO a single payment channel at a given address?
     if (!account.ethereumAddress) {
       // Resolve the Ethereum address the client wants to be paid at
       const infoResponse = await this._call(address, {
@@ -216,15 +214,13 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
       })
 
       const info = JSON.parse(infoResponse.protocolData[0].data.toString())
-
       if (this._web3.isAddress(info.ethereumAddress)) {
         account.ethereumAddress = info.ethereumAddress
       }
     }
   }
 
-  // Called by ilp-plugin-btp when a type MESSAGE BTP packet is received
-  // TODO no, it's called by mini accounts
+  // Called by ilp-plugin-mini-accounts when a type MESSAGE BTP packet is received
   _handleCustomData = async (from: string, message: BtpPacket) => {
     const account = this._getAccount(from)
 
@@ -245,10 +241,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
     // Handle ILP PREPARE packets
     // Any response packets (FULFILL or REJECT) should come from data handler response,
     // not wrapped in a BTP message (connector/data handler would throw an error anyways?)
-    // TODO check if payment channel exists? What if peer does not have
-    // enough money in the channel? Or if there is no channel? Could employ
-    // similar logic to xrp asym server. Deposit 10xrp, along with a channel
-    // protocol transmitting channel details?
+    // TODO: payment channel existence and validation? At least for the sender
     if (ilp && ilp.data[0] === IlpPacket.Type.TYPE_ILP_PREPARE) {
       const { amount, expiresAt } = IlpPacket.deserializeIlpPrepare(ilp.data)
       if (account.isBlocked) {
@@ -278,23 +271,23 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
       account.balance = newBalance
       this._log.trace(`account ${account.accountName} debited ${formatAmount(amount, 'eth')}, new balance ${formatAmount(newBalance, 'eth')}`)
 
+      // Expiry timer for reject
+      let timer = new Promise(resolve => setTimeout(() => {
+        resolve(IlpPacket.serializeIlpReject({
+          code: 'R00',
+          triggeredBy: this._prefix, // TODO: is that right?
+          message: 'expired at ' + new Date().toISOString(),
+          data: Buffer.from('')
+        }))
+      }, expiresAt.getTime() - Date.now())) 
+
       // Forward the packet to data handler, wait for response
+      // Send reject if PREPARE expires before a response is received
       let response = await Promise.race([
         this._dataHandler(ilp.data),
-        // Send reject if PREPARE expires before a response is received
-        new Promise<Buffer>((resolve, reject) => {
-          setTimeout(() => {
-            reject(
-              IlpPacket.errorToReject(this._prefix, {
-                ilpErrorCode: 'R00',
-                message: `Expired at ${new Date().toISOString()}`
-              })
-            )
-          }, expiresAt.getTime() - Date.now())
-        })
+        timer
       ])
 
-      // TODO allow negative payment?
       if (response[0] === IlpPacket.Type.TYPE_ILP_REJECT) {
         account.balance = account.balance.minus(amount)
         this._log.trace(`Account ${account.accountName} roll back ${formatAmount(amount, 'eth')}, new balance ${formatAmount(account.balance, 'eth')}`)
@@ -309,7 +302,6 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
           this._moneyHandler(amount)
         }
       }
-
       return this.ilpAndCustomToProtocolData({ ilp: response })
     }
 
@@ -362,7 +354,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
 
         // isFunding should be toggled after all non-funding related aysnc operations have completed, but before any balance changes occur
         if (account.isFunding) {
-          throw new Trace(`Failed to pay account ${account.accountName}: another funding event was occuring simultaneously.`)
+          throw new Trace(`another funding event was occuring simultaneously.`)
         }
         account.isFunding = true
 
@@ -472,10 +464,12 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
           }
         })
       } catch (err) {
-        (err.name === 'Trace'
-          ? this._log.trace
-          : this._log.error
-        )(`Failed to pay account ${account.accountName}: ${err}`)
+        let message = `Failed to pay account ${account.accountName}: ${err}`
+        if (err.name === 'Trace') {
+          this._log.trace(message)     
+        } else {
+          this._log.error(message)
+        }
       }
     }
   }
