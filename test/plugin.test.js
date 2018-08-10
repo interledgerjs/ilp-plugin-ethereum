@@ -5,7 +5,7 @@ const HDWalletProvider = require('truffle-hdwallet-provider')
 const Store = require('./util/memStore')
 const BtpPacket = require('btp-packet')
 const IlpPacket = require('ilp-packet')
-const debug = require('debug')('ilp-plugin-ethereum-asym-server:test')
+const debug = require('debug')('ilp-plugin-eohereum-asym-server:test')
 const getPort = require('get-port')
 const formatAmount = require('../build/index.js').formatAmount
 const crypto = require('crypto')
@@ -13,9 +13,11 @@ const crypto = require('crypto')
 const secret = 'lazy glass net matter square melt fun diary network bean play deer'
 const providerUrl = "https://ropsten.infura.io/T1S8a0bkyrGD7jxJBgeH"
 const provider = new HDWalletProvider(secret, providerUrl, 0)
+function sha256 (preimage) { return crypto.createHash('sha256').update(preimage).digest() }
+
+class Trace extends Error {}
 
 /* TODO Mock for web3, HDWallet, and Machinomy API. */
-/* NOTE HDWalletProvider hangs on create. */
 async function createPlugin() {
   /* Silence console log output from provider creation. */
   const _pre = console.log
@@ -40,42 +42,6 @@ async function createPlugin() {
   return plugin
 }
 
-function sha256 (preimage) { return crypto.createHash('sha256').update(preimage).digest() }
-
-function createBtpSubprotocolArrayJSON(protocolName, dataObj) {
-    return [{
-      protocolName: protocolName,
-      contentType: BtpPacket.MIME_APPLICATION_JSON,
-      data: Buffer.from(JSON.stringify(dataObj))
-    }]
-} 
-
-
-function createBtpSubprotocolArrayOctet(protocolName, data) {
-    return [{
-      protocolName: protocolName,
-      contentType: BtpPacket.MIME_APPLICATION_OCTET_STREAM,
-      data: data 
-    }]
-} 
-
-function createBtpPacket(type, data) {
-  return {
-    requestId: 0,
-    type: type,
-    data: { protocolData: data } 
-  }
-} 
-
-function createIlpPrepare(destination, amount) {
-  return IlpPacket.serializeIlpPrepare({
-    amount: amount.toString(),
-    executionCondition: sha256('ASDWSDG3425ASD235'),
-    destination: destination,
-    data: Buffer.alloc(0),
-    expiresAt: new Date(Date.now() + 10000)
-  })
-}
 
 beforeEach(async () => {
   try {
@@ -84,14 +50,52 @@ beforeEach(async () => {
   } catch (e) {
     throw e
   }
-    this.mockAccountName = 'ADSBG124AS62ASF45GHJB' 
-    this.mockAccountAddress = this.plugin._debugHostIldcpInfo.clientAddress + '.' + this.mockAccountName
-    this.mockAccount = this.plugin._getAccount(this.mockAccountAddress)
+
+  this.mockAccountName = 'ADSBG124AS62ASF45GHJB' 
+  this.mockAccountAddress = this.plugin._debugHostIldcpInfo.clientAddress + '.' + this.mockAccountName
+  this.mockAccount = this.plugin._getAccount(this.mockAccountAddress)
+  this.mockFulfillment = crypto.randomBytes(32)
+  this.mockIlpPrepare = {
+    amount: '100', 
+    executionCondition: sha256(this.mockFulfillment),
+    destination: this.mockAccountAddress,
+    data: Buffer.alloc(0),
+    expiresAt: new Date(Date.now() + 10000)
+  }
+  this.mockIlpFulfill = {
+    fulfillment: this.mockFulfillment,
+    data: Buffer.alloc(0)
+  }
+  this.mockBtpPacketInfo = {
+    requestId: 0,
+    type: BtpPacket.TYPE_MESSAGE,
+    data: {
+      protocolData: [{
+        protocolName: 'info',
+        contentType: BtpPacket.MIME_APPLICATION_JSON,
+        data: Buffer.from(JSON.stringify({
+          ethereumAddress: this.plugin._address
+        }))
+      }]
+    }
+  }
+  this.mockBtpPacketIlp = function (ilpData) {
+    return {
+      requestId: 0,
+      type: BtpPacket.TYPE_MESSAGE,
+      data: {
+        protocolData: [{
+          protocolName: 'ilp',
+          contentType: BtpPacket.MIME_APPLICATION_OCTET_STREAM,
+          data: ilpData.amount ? IlpPacket.serializeIlpPrepare(ilpData) : IlpPacket.serializeIlpFulfill(ilpData) 
+        }]
+      }
+    }
+  }
 })
 
 afterEach(async () => {
   try {
-    await this.plugin._provider.engine.stop()
     await this.plugin.disconnect()
   } catch (e) {
     throw e
@@ -188,17 +192,17 @@ describe('ilp-plugin-ethereum-asym-server tests', () => {
       this.mockAccount.isBlocked = true
       try {
         await this.plugin._connect(this.mockAccountAddress, {})
+        throw Error('Test Error: should trigger catch')
       } catch (e) {
         expect(e).toEqual(new Error(`Cannot connect to blocked account ${this.mockAccountName}`))
       }
     })
 
-    test('ethereum address retrieved from client through \'info\' protocol', () => {
-      const btpPacketData = {protocolData: createBtpSubprotocolArrayJSON('info', {
-        ethereumAddress: this.plugin._address
-      })}
-      const info = JSON.parse(btpPacketData.protocolData[0].data.toString()) 
-      expect(info.ethereumAddress).toBe(this.plugin._address)
+    test('ethereum address retrieved from client through \'info\' protocol', async () => {
+      this.plugin._call = jest.fn() 
+      this.plugin._call.mockImplementation(() => this.mockBtpPacketInfo.data)
+      await this.plugin._connect(this.mockAccountAddress, {})
+      expect(this.plugin._getAccount(this.mockAccountAddress).ethereumAddress).toBe(this.plugin._address)
     })
   })
 
@@ -210,15 +214,19 @@ describe('ilp-plugin-ethereum-asym-server tests', () => {
    * throw if amount in prepare > maxPacket amount
    * throw if amount in prepare puts account over maximum balance
    * throw if no data handler
+   * on reject response from data handler (from expiry): 
+   *   account balance rolled back 
+   *   packet type of ilp reject 
+   * on fulfill response from data handler:
+   *   account balance updated
+   *   throw on no money handler 
+   *   throw on negative amount
+   *   call money handler and return packet type of fulfill 
    */
   describe('_handleCustomData', () => {
     test('btp message with \'info\' protocol returns btp subprotocol data with server eth address', async () => {
-      const btpSubprotocolArray = createBtpSubprotocolArrayJSON('info', {
-        ethereumAddress: this.plugin._address
-      })
-      const btpPacket = createBtpPacket(BtpPacket.TYPE_MESSAGE, btpSubprotocolArray)
       try {
-        expect(await this.plugin._handleCustomData(this.mockAccountAddress, btpPacket)).toEqual(btpSubprotocolArray)
+        expect(await this.plugin._handleCustomData(this.mockAccountAddress, this.mockBtpPacketInfo)).toEqual(this.mockBtpPacketInfo.data.protocolData)
       } catch (e) {
         throw e
       } 
@@ -226,20 +234,19 @@ describe('ilp-plugin-ethereum-asym-server tests', () => {
 
     test('throw if prepare from blocked account received', async () => {
       this.mockAccount.isBlocked = true
-      const btpSubprotocolArray = createBtpSubprotocolArrayOctet('ilp', createIlpPrepare(this.mockAccountAddress, 100))
-      const btpPacket = createBtpPacket(BtpPacket.TYPE_MESSAGE, btpSubprotocolArray)
       try {
-        await this.plugin._handleCustomData(this.mockAccountAddress, btpPacket)
+        await this.plugin._handleCustomData(this.mockAccountAddress, this.mockBtpPacketIlp(this.mockIlpPrepare))
+        throw Error('Test Error: should trigger catch')
       } catch (e) {
         expect(e).toEqual(new IlpPacket.Errors.UnreachableError('Account has been closed.'))
       }
     })
 
     test('throw if amount in prepare > maxPacket amount', async () => {
-      const btpSubprotocolArray = createBtpSubprotocolArrayOctet('ilp', createIlpPrepare(this.mockAccountAddress, 101))
-      const btpPacket = createBtpPacket(BtpPacket.TYPE_MESSAGE, btpSubprotocolArray)
+      this.mockIlpPrepare.amount = '101'
       try {
-        await this.plugin._handleCustomData(this.mockAccountAddress, btpPacket)
+        await this.plugin._handleCustomData(this.mockAccountAddress, this.mockBtpPacketIlp(this.mockIlpPrepare))
+        throw Error('Test Error: should trigger catch')
       } catch (e) {
         expect(e).toEqual(new IlpPacket.Errors.AmountTooLargeError('Packet size is too large.', {
           receivedAmount: '101',
@@ -249,24 +256,199 @@ describe('ilp-plugin-ethereum-asym-server tests', () => {
     })
 
     test('throw if amount in prepare puts account over maximum balance',  async () => {
-      const btpSubprotocolArray = createBtpSubprotocolArrayOctet('ilp', createIlpPrepare(this.mockAccountAddress, 100))
-      const btpPacket = createBtpPacket(BtpPacket.TYPE_MESSAGE, btpSubprotocolArray)
       const newBalance = this.mockAccount.balance.plus(100)
       try {
-        await this.plugin._handleCustomData(this.mockAccountAddress, btpPacket)
+        await this.plugin._handleCustomData(this.mockAccountAddress, this.mockBtpPacketIlp(this.mockIlpPrepare))
+        throw Error('Test Error: should trigger catch')
       } catch (e) {
         expect(e).toEqual(new IlpPacket.Errors.InsufficientLiquidityError(
           `Insufficient funds, prepared balance is ${formatAmount(newBalance, 'eth')}, above max of ${formatAmount(this.plugin.balance.maximum, 'eth')}`
         ))
       }
     })
-  })  
 
-  /* TODO
-   *
+    test('throw if no data handler', async () => {
+      this.plugin.balance.maximum = 200 
+      try {
+        await this.plugin._handleCustomData(this.mockAccountAddress, this.mockBtpPacketIlp(this.mockIlpPrepare))
+        throw Error('Test Error: should trigger catch')
+      } catch (e) {
+        expect(e).toEqual(new Error('no request handler registered'))    
+      }
+    })
+
+    describe('on reject response from data handler (from expiry)', () => {
+      beforeEach(async () => {
+        jest.useFakeTimers()
+        this.oldBalance = this.mockAccount.balance
+        this.plugin.balance.maximum = 200
+        this.plugin.registerDataHandler(() => new Promise(resolve => setTimeout(() => resolve(), 100000)))
+        try {
+          this.protocolDataResponse = this.plugin._handleCustomData(this.mockAccountAddress, this.mockBtpPacketIlp(this.mockIlpPrepare))
+          jest.runOnlyPendingTimers()
+          await this.protocolDataResponse
+        }
+        catch (e) {
+          throw e
+        }
+      })
+      
+      test('account balance rolled back', async () => {
+        expect(this.oldBalance).toEqual(this.mockAccount.balance)
+      })
+
+      test('return packet of type reject', async () => {
+        const protocolDataResponse = await this.protocolDataResponse
+        expect(protocolDataResponse[0].data[0]).toBe(IlpPacket.Type.TYPE_ILP_REJECT)
+      })
+    })
+    
+    describe('on fulfill response from data handler', () => {
+      beforeEach(() => {
+        jest.useFakeTimers()
+        this.plugin.registerDataHandler(() => new Promise(resolve => setTimeout(() => resolve(IlpPacket.serializeIlpFulfill(this.mockIlpFulfill)), 1000)))
+        this.plugin.balance.maximum = 200
+      })
+
+      test('account balance updated', async () => {
+        try {
+          const oldBalance = this.mockAccount.balance
+          const protocolDataResponse = this.plugin._handleCustomData(this.mockAccountAddress, this.mockBtpPacketIlp(this.mockIlpPrepare))
+          jest.runOnlyPendingTimers()
+          await protocolDataResponse
+          expect(oldBalance).toEqual(this.mockAccount.balance - this.mockIlpPrepare.amount)
+        } catch (e) {}
+      })
+
+      test('throw on no money handler', async () => {
+        try {
+          const protocolDataResponse = this.plugin._handleCustomData(this.mockAccountAddress, this.mockBtpPacketIlp(this.mockIlpPrepare))
+          jest.runOnlyPendingTimers()
+          await protocolDataResponse
+          throw Error('Test Error: should trigger catch')
+        } catch (e) {
+          expect(e).toEqual(new Error('no money handler registered')) 
+        }
+      })
+
+      test('throw on negative amount', async () => {
+        try {
+          const protocolDataResponse = this.plugin._handleCustomData(this.mockAccountAddress, this.mockBtpPacketIlp(this.mockIlpPrepare))
+          jest.runOnlyPendingTimers()
+          await protocolDataResponse
+          throw Error('Test Error: should trigger catch')
+        } catch (e) {
+          expect(e).toEqual(new Error('no money handler registered')) 
+        }
+      })
+
+      test('call money handler and return fulfill in btp subprotocol', async () => {
+        const mockMoneyHandler = jest.fn()
+        this.plugin.registerMoneyHandler(mockMoneyHandler)
+        try {
+          let protocolDataResponse = this.plugin._handleCustomData(this.mockAccountAddress, this.mockBtpPacketIlp(this.mockIlpPrepare))
+          jest.runOnlyPendingTimers()
+          protocolDataResponse = await protocolDataResponse
+          expect(protocolDataResponse[0].data[0]).toBe(IlpPacket.Type.TYPE_ILP_FULFILL)
+          expect(mockMoneyHandler).toHaveBeenCalledTimes(1)
+        } catch (e) {
+          throw e
+        }
+      })
+    })
+  })  
+  
+  /**
    * _sendPrepare
    *
-   * _handlePrepareResponse 
+   * throw on blocked account
+   * throw on account with no ethereum address
+   */
+  describe('_sendPrepare', () => {
+    test('throw on blocked account', () => {
+      this.mockAccount.isBlocked = true
+      expect(() => this.plugin._sendPrepare(this.mockAccountAddress, {}))
+        .toThrow(new IlpPacket.Errors.UnreachableError('Account has been closed'))
+    })
+
+    test('throw on account with no ethereum address', () => {
+      expect(() => this.plugin._sendPrepare(this.mockAccountAddress, {}))
+        .toThrow(new IlpPacket.Errors.UnreachableError('No Ethereum address linked with account, cannot forward PREPARE'))
+    })
+  })
+
+  /**
+   * _handlePrepareResponse
+   *
+   * response type is ilp fulfill
+   * account balance descreased by amount in fulfill
+   * throw on outgoing channel with the wrong ethereum address as the receiver
+   * throw trace if account is funding
+   * if no channel OR existing channel is settling//settled: 
+   *   throw if balance + channel open fees > max balance
+   */
+  describe('_handlePrepareResponse', () => {
+    beforeEach(() => {
+      this.plugin._log.trace = jest.fn()
+
+      this.preError = `Failed to pay account ${this.mockAccountName}: `
+      this.mockIlpPacketFulfill = {
+        type: IlpPacket.Type.TYPE_ILP_FULFILL,
+        data: this.mockIlpFulfill
+      }
+
+      this.mockIlpPacketPrepare = {
+        type: IlpPacket.Type.TYPE_ILP_PREPARE,
+        data: this.mockIlpPrepare
+      }
+    })
+
+    test('response type is ilp fulfill', async () => {
+      this.mockAccount.isFunding = true
+      try {
+        await this.plugin._handlePrepareResponse(this.mockAccountAddress, this.mockIlpPacketFulfill, this.mockIlpPacketPrepare)
+        expect(this.plugin._log.trace.mock.calls[0][0]).toEqual(`Handling a ILP_FULFILL in response to the forwarded ILP_PREPARE`)
+      } catch (e) {
+        throw e
+      }
+    })
+
+    test('account balance decreased by amount in fulfill', async () => {
+      const oldBalance = this.mockAccount.balance
+      this.mockAccount.isFunding = true
+      try {
+        await this.plugin._handlePrepareResponse(this.mockAccountAddress, this.mockIlpPacketFulfill, this.mockIlpPacketPrepare)
+        expect(parseInt(this.mockAccount.balance)).toBe(oldBalance - this.mockIlpPrepare.amount)
+      } catch (e) {
+        throw e
+      }
+    })
+
+    test('throw on outgoing channel with the wrong ethereum address as the receiver', async () => {
+      this.mockAccount.isFunding = true
+       
+      try {
+        await this.plugin._handlePrepareResponse(this.mockAccountAddress, this.mockIlpPacketFulfill, this.mockIlpPacketPrepare)
+        // expect(parseInt(this.mockAccount.balance)).toBe(oldBalance - this.mockIlpPrepare.amount)
+      } catch (e) {
+        throw e
+      }
+    })
+
+    test('throw trace if account is funding', async () => {
+      this.mockAccount.isFunding = true
+      try {
+        await this.plugin._handlePrepareResponse(this.mockAccountAddress, this.mockIlpPacketFulfill, this.mockIlpPacketPrepare)
+        expect(this.plugin._log.trace.mock.calls[2][0]).toEqual(this.preError + 'Trace: another funding event was occuring simultaneously.')
+      } catch (e) {
+        throw e
+      }
+    })
+  })
+
+
+  /* TODO
+   * rest of _handlePrepareResponse
    *
    * _handleMoney
    *
