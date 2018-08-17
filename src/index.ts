@@ -52,8 +52,13 @@ export const getSubprotocol = (message: BtpPacket, name: string) =>
 export const requestId = async () =>
   (await promisify(randomBytes)(4)).readUInt32BE(0)
 
-export const formatAmount = (num: string | BigNumber, toUnit: string) =>
-  Units.convert(new BigNumber(num), 'gwei', toUnit).toString() + ' ' + toUnit
+// TODO PR: units.convert hangs on negative values
+export const formatAmount = (num: string | BigNumber, toUnit: string) => {
+  if (new BigNumber(num).isNegative()) {
+    return `-(${Units.convert(new BigNumber(num).negated(), 'gwei', toUnit).toString()}) ${toUnit}`
+  }
+  return Units.convert(new BigNumber(num), 'gwei', toUnit).toString() + ' ' + toUnit
+}
 
 export default class MachinomyServerPlugin extends MiniAccountsPlugin {
   static version: number = 2
@@ -155,7 +160,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
         set: (obj, prop, val) => {
           obj[prop] = val
           this._store.set(accountName, JSON.stringify(obj))
-          return Reflect.set(obj, prop, val)
+          return true
         }
       })
       this._accounts.set(accountName, account)
@@ -188,7 +193,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
       set: (obj, prop, val) => {
         obj[prop] = val
         this._store.set(account.accountName, JSON.stringify(obj))
-        return Reflect.set(obj, prop, val)
+        return true
       }
     })
 
@@ -197,7 +202,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
     if (account.isBlocked) {
       throw new Error(`Cannot connect to blocked account ${account.accountName}`)
     }
- 
+
     // Only a single Ethereum address can be linked to an account, for the lifetime of the account
     if (!account.ethereumAddress) {
       // Resolve the Ethereum address the client wants to be paid at
@@ -241,7 +246,6 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
     // Handle ILP PREPARE packets
     // Any response packets (FULFILL or REJECT) should come from data handler response,
     // not wrapped in a BTP message (connector/data handler would throw an error anyways?)
-    // TODO: payment channel existence and validation? At least for the sender
     if (ilp && ilp.data[0] === IlpPacket.Type.TYPE_ILP_PREPARE) {
       const { amount, expiresAt } = IlpPacket.deserializeIlpPrepare(ilp.data)
       if (account.isBlocked) {
@@ -272,14 +276,18 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
       this._log.trace(`account ${account.accountName} debited ${formatAmount(amount, 'eth')}, new balance ${formatAmount(newBalance, 'eth')}`)
 
       // Expiry timer for reject
-      let timer = new Promise(resolve => setTimeout(() => {
-        resolve(IlpPacket.serializeIlpReject({
-          code: 'R00',
-          triggeredBy: this._prefix, // TODO: is that right?
-          message: 'expired at ' + new Date().toISOString(),
-          data: Buffer.from('')
-        }))
-      }, expiresAt.getTime() - Date.now())) 
+      let timeout: NodeJS.Timer
+      let timer = new Promise(resolve => {
+        timeout = setTimeout(() => {
+          resolve(IlpPacket.serializeIlpReject({
+            code: 'R00',
+            triggeredBy: this._prefix, // TODO: is that right?
+            message: 'expired at ' + new Date().toISOString(),
+            data: Buffer.from('')
+          }))
+          clearTimeout(timeout)
+        }, expiresAt.getTime() - Date.now())
+      })
 
       // Forward the packet to data handler, wait for response
       // Send reject if PREPARE expires before a response is received
@@ -310,7 +318,6 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
 
   // After calling sendData on the plugin, this is called first
   // Errors should throw ILP packets (prior to any await/Promise is returned)
-  // TODO: again, should we be able to send a prepare without a payment channel?
   _sendPrepare (destination: string, preparePacket: IlpPacket.IlpPacket) {
     const account = this._getAccount(destination)
 
@@ -326,6 +333,10 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
   // Handler after response is received within sendData (called by mini-accounts)
   // Use an async function so it won't hold up passing response packet back to sender
   // If it's a FULFILL, the execution condition is already verified in mini-accounts
+  // TODO: race conditions -- is isFunding susceptible? To multiple async calls
+  // at once.
+  // TODO: why not update balances after machinomy.open / machinomy.deposit? And
+  // use web3 to get the exact fee prices?
   _handlePrepareResponse = async (destination: string, parsedResponse: IlpPacket.IlpPacket, preparePacket: IlpPacket.IlpPacket) => {
     const responseType = Object.keys(IlpPacket.Type)[Object.values(IlpPacket.Type).indexOf(parsedResponse.type)].slice(5) // => e.g. 'ILP_FULFILL'
     this._log.trace(`Handling a ${responseType} in response to the forwarded ILP_PREPARE`)
@@ -363,9 +374,9 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
         try {
           // Check if an on-chain funding tx is required
           let requiresNewChannel = !channel // If no channel exists
-            || channel.state !== 1 // If existing channel is settling or settled
+            || channel.state !== 0 // If existing channel is settling or settled
           let requiresDeposit = channel &&
-            amount.gt(channel.value.minus(channel.spent)) // If amount to settle is greater than amount in channel
+            amount.gt(Units.convert(channel.value.minus(channel.spent), 'wei', 'gwei')) // If amount to settle is greater than amount in channel
 
           // Update balance to account for an on-chain transaction fee
           let feeEstimate
@@ -391,7 +402,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
           }
 
           if (this.balance.settleThreshold.lt(account.balance)) {
-            throw new Trace(`below settle threshold; funds with continue to accumulate.`)
+            throw new Trace(`below settle threshold; funds will continue to accumulate.`)
           }
 
           // Balance was updated, so update amount to send
@@ -400,7 +411,9 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
           const fundAmount = BigNumber.max(amount, OUTGOING_CHANNEL_AMOUNT)
           const fundAmountWei = Units.convert(fundAmount, 'gwei', 'wei')
 
-          if (!channel || channel.state !== 1) {
+          // TODO we never update for the difference of the fee estimate here?
+          // Like we do for the deposit below
+          if (!channel || channel.state !== 0) {
             if (!account.ethereumAddress) {
               throw new Error(`no Ethereum address was linked.`)
             }
@@ -416,8 +429,10 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
             const { receipt, tx } = await this._machinomy.deposit(channel.channelId, fundAmountWei)
 
             // Refund fee estimate and update balance with actual tx fee (if tx is still pending, it fetches gas used from pending tx)
-            const gasPrice = (await promisify(this._web3.eth.getTransaction)(tx)).gasPrice
-            const actualFee = new BigNumber(receipt.gasUsed).times(gasPrice)
+            // TODO getTransaction does get past this point in the code in a promisified version
+            const getTransaction = promisify(this._web3.eth.getTransaction)
+            const gasPriceInGwei = this._web3.fromWei((await getTransaction(tx)).gasPrice, 'gwei')
+            const actualFee = new BigNumber(receipt.gasUsed).times(gasPriceInGwei)
             const diff = actualFee.minus(feeEstimate as BigNumber)
             account.balance = account.balance.plus(diff)
             this._log.trace(`Updated balance for account ${account.accountName} to reflect difference of ${diff} gwei between actual and estimated transaction fees`)
@@ -433,7 +448,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
 
         // Don't send a paychan update for 0 or negative amounts; Machinomy won't throw an error
         if (amount.lte(0)) {
-          throw new Trace(`Failed to pay account ${account.accountName}: insufficient balance to trigger settlement.`)
+          throw new Trace(`insufficient balance to trigger settlement.`)
         }
 
         // Construct the payment for the given amount
@@ -451,7 +466,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
         account.balance = account.balance.plus(amount)
 
         // Send paychan claim to client
-        this._call(destination, {
+        return this._call(destination, {
           type: BtpPacket.TYPE_TRANSFER,
           requestId: await requestId(),
           data: {
@@ -466,7 +481,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
       } catch (err) {
         let message = `Failed to pay account ${account.accountName}: ${err}`
         if (err.name === 'Trace') {
-          this._log.trace(message)     
+          this._log.trace(message)
         } else {
           this._log.error(message)
         }
@@ -516,8 +531,10 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
       }
 
       // Machinomy doesn't verify price adds up, so calculate amount to credit ourselves
-      const amount = Units.convert(channel.spent.minus(payment.value), 'wei', 'gwei')
-      account.balance = account.balance.minus(amount)
+      // TODO why were we doing this shouldn't we just subtract the payment from
+      // the balance?
+      /* const amount = Units.convert(channel.spent.minus(payment.value), 'wei', 'gwei') */
+      account.balance = account.balance.minus(Units.convert(new BigNumber(payment.value), 'wei', 'gwei'))
       this._log.trace(`Updated balance for account ${account.accountName} to ${formatAmount(account.balance, 'eth')}`)
     } else {
       throw new Error(`BTP TRANSFER packet did not include any Machinomy subprotocol data`)
@@ -529,7 +546,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
   private _startWatcher () {
     // Average block time of 15s => ~200 polls would occur during a settlement period
     // With the default settlement period of ~1 week, default polling interval is every ~50 min
-    const interval = (this._minimumSettlementPeriod * 15) / 200
+    const interval = ((this._minimumSettlementPeriod * 15) / 200) * 1000
     const timer = setInterval(async () => {
       // If sender starts settling and we don't claim the channel before the settling period ends,
       // all our money goes back to them! (bad)
@@ -538,7 +555,7 @@ export default class MachinomyServerPlugin extends MiniAccountsPlugin {
       for (let c of channels) {
         for (let [, account] of this._accounts) {
           if (c.channelId === account.incomingChannelId) {
-            // TODO account not actually being blocked?
+            account.isBlocked = true
             this._log.info(`Account ${account.accountName} is now blocked for attempting to clear our funds from channel.`)
           }
         }
