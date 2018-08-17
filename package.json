@@ -10,7 +10,7 @@
     "tslint": "tslint --project .",
     "eslint": "eslint test",
     "test": "jest --detectOpenHandles",
-    "testWatch": "jest --watch --detectOpenHandles"
+    "testWatch": "jest --watch --detectOpenHandles --verbose false"
   },
   "author": "",
   "license": "ISC",

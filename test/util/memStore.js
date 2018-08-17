@@ -10,11 +10,11 @@ class MemStore {
   }
 
   async put (key, value) {
-    this.store[key] = value 
+    this.store[key] = value
   }
 
   async del (key) {
-    delete this.store[key] 
+    delete this.store[key]
   }
 }
 
