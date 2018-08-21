@@ -2,7 +2,7 @@ version: 2
 jobs:
   build:
     docker:
-      - image: circleci/node:10.2.1
+      - image: circleci/node:10
 
     working_directory: ~/repo
 
@@ -24,7 +24,7 @@ jobs:
           key: v1-dependencies-{{ checksum "package.json" }}
 
       # run tests!
-      #- run: npm test
+      - run: npm test
 
       # lint
       - run: npm run lint
@@ -57,7 +57,10 @@ jobs:
           key: v8-dependencies-{{ checksum "package.json" }}
 
       # run tests!
-      #- run: npm test
+      - run: npm test
+
+      # lint
+      - run: npm run lint
 
   publish_to_npm:
     docker:

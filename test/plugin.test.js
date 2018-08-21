@@ -95,7 +95,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  this.plugin._provider.engine.stop() 
+  this.plugin._provider.engine.stop()
   await this.plugin.disconnect()
 })
 

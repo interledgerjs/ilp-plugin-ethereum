@@ -6,11 +6,14 @@
   "types": "build/index.d.ts",
   "scripts": {
     "build": "tsc --project .",
-    "buildWatch": "tsc --watch --project .",
+    "build-watch": "tsc --watch --project .",
+    "lint": "npm run tslint && npm run eslint",
     "tslint": "tslint --project .",
     "eslint": "eslint test",
+    "postinstall": "npm run build",
+    "pretest": "npm run build",
     "test": "jest --detectOpenHandles",
-    "testWatch": "jest --watch --detectOpenHandles --verbose false"
+    "test-watch": "jest --watch --detectOpenHandles --verbose false"
   },
   "author": "",
   "license": "ISC",
@@ -22,7 +25,7 @@
     "ilp-logger": "^1.0.2",
     "ilp-packet": "^2.2.0",
     "ilp-plugin-mini-accounts": "^3.5.1",
-    "machinomy": "^1.12.8",
+    "machinomy": "^1.12.9",
     "minomy": "github:Kava-Labs/minomy"
   },
   "devDependencies": {
