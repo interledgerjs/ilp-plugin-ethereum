@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
-    "outDir": "build",
+    "rootDir": "./src",
+    "outDir": "./build",
     "target": "es2017",
     "module": "commonjs",
     "sourceMap": true,
@@ -10,7 +11,8 @@
     "moduleResolution": "node",
     "inlineSources": true,
     "strictNullChecks": true,
-    "suppressImplicitAnyIndexErrors": true
+    "suppressImplicitAnyIndexErrors": true,
+    "alwaysStrict": true
   },
   "compileOnSave": true
 }

@@ -5,36 +5,33 @@
   "main": "build/index.js",
   "types": "build/index.d.ts",
   "scripts": {
-    "build": "npm run compile-ts",
-    "compile-ts": "tsc --project .",
+    "build": "tsc --project .",
     "lint": "tslint --project .",
     "pretest": "npm run build",
     "postinstall": "npm run build",
-    "test": "jest"
+    "test": "jest",
+    "watch": "jest --watch"
   },
-  "author": "",
   "license": "ISC",
   "dependencies": {
-    "bignumber.js": "^4.1.0",
+    "@machinomy/contracts": "4.1.1",
+    "@types/web3": "^1.0.3",
+    "bignumber.js": "^7.2.1",
     "btp-packet": "^1.2.1",
     "ilp-logger": "^1.0.1",
     "ilp-packet": "^2.2.0",
-    "ilp-plugin-mini-accounts": "^3.5.0",
-    "machinomy": "^1.12.0"
+    "ilp-plugin-btp": "github:kincaidoneil/ilp-plugin-btp",
+    "ilp-plugin-mini-accounts": "github:kincaidoneil/ilp-plugin-mini-accounts",
+    "minomy": "github:Kava-Labs/minomy"
   },
   "devDependencies": {
-    "@machinomy/types-truffle-hdwallet-provider": "0.0.2",
     "@types/jest": "^23.3.0",
     "@types/request": "^2.47.1",
-    "ganache-cli": "^6.1.6",
     "jest": "^23.4.1",
     "source-map-support": "^0.5.6",
     "standard": "^11.0.1",
-    "truffle-hdwallet-provider": "https://github.com/machinomy/truffle-hdwallet-provider#8fe3dc5640cda0aedd6e58d62da9adc38d359a8a",
-    "ts-jest": "^23.0.1",
-    "ts-node": "^7.0.0",
-    "tslint": "^5.10.0",
+    "tslint": "^5.11.0",
     "tslint-config-standard": "^7.1.0",
-    "typescript": "^2.9.2"
+    "typescript": "^3.0.1"
   }
 }
