@@ -11,7 +11,7 @@ import { randomBytes } from 'crypto'
 import { promisify } from 'util'
 
 // FIXME confirm this actually works
-BigNumber.config({ EXPONENTIAL_AT: Infinity }) // Never, ever, use exponential notation
+BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 
 enum Unit { Eth = 18, Gwei = 9, Wei = 0 }
 
@@ -112,7 +112,40 @@ export default class EthereumAccount {
       }
     })
 
+    // TODO server _connect is triggered first!?
+    if (this.master._role === 'server') {
+      return
+    }
+
+    // Tell the peer what address this instance should be paid at
+    // Also request the Ethereum address the peer wants to be paid at
+    const response = await this.sendMessage({
+      type: BtpPacket.TYPE_MESSAGE,
+      requestId: await requestId(),
+      data: {
+        protocolData: [{
+          protocolName: 'info',
+          contentType: BtpPacket.MIME_APPLICATION_JSON,
+          data: Buffer.from(JSON.stringify({
+            ethereumAddress: this.master._ethereumAddress
+          }))
+        }]
+      }
+    })
+
+    // FIXME make this validation more robust
+    const { ethereumAddress } = JSON.parse(response.protocolData[0].data.toString())
+
+    if (Web3.utils.isAddress(ethereumAddress)) {
+      this.account.ethereumAddress = ethereumAddress
+    }
+
     // TODO start watcher for this individual account?
+  }
+
+  calculateTxFee (tx: Minomy.Tx): BigNumber {
+    return convert(new BigNumber(tx.gasPrice).times(tx.gas), Unit.Wei, Unit.Gwei)
+      .decimalPlaces(0, BigNumber.ROUND_CEIL)
   }
 
   async fundOutgoingChannel () {
@@ -141,13 +174,11 @@ export default class EthereumAccount {
     if (requiresNewChannel) {
       const { tx, channelId } = await Minomy.openChannel(this.master._web3, {
         address: this.account.ethereumAddress!,
-        value: amount
+        value: convert(amount, Unit.Gwei, Unit.Wei).decimalPlaces(0, BigNumber.ROUND_CEIL) // TODO round up? round down?
       })
 
-      const txFee = new BigNumber(tx.gasPrice).times(tx.gas)
-
       try {
-        this.account.balance = this.account.balance.plus(txFee)
+        this.account.balance = this.account.balance.plus(this.calculateTxFee(tx))
       } catch (err) {
         this.master._log.trace(`Insufficient funds to create channel: `, err.message)
         return
@@ -166,12 +197,13 @@ export default class EthereumAccount {
       this.master._log.trace(`Outgoing channel ${channelId} is now linked to account ${this.account.accountName}`)
     } else if (requiresDeposit) {
       const channelId = this.account.outgoingChannelId!
-      const tx = await Minomy.depositToChannel(this.master._web3, { channelId, value: amount })
-
-      const txFee = new BigNumber(tx.gasPrice).times(tx.gas)
+      const tx = await Minomy.depositToChannel(this.master._web3, {
+        channelId,
+        value: convert(amount, Unit.Gwei, Unit.Wei).decimalPlaces(0, BigNumber.ROUND_CEIL)
+      })
 
       try {
-        this.account.balance = this.account.balance.plus(txFee)
+        this.account.balance = this.account.balance.plus(this.calculateTxFee(tx))
       } catch (err) {
         return this.master._log.trace(`Insufficient funds for on-chain deposit to send full payment: ${err.message}`)
       }

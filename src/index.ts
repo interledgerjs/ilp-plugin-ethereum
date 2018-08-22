@@ -25,14 +25,16 @@ interface EthereumPluginOpts {
     // Maximum balance counterparty owes this instance before incoming packets are rejected
     maximum: BigNumber.Value // gwei
   }
+  receiveOnly: boolean
   _store?: any // Resolves incompatiblities with the older ilp-store-wrapper used by mini-accounts
   _log?: Logger
 }
 
 class EthereumPlugin extends EventEmitter2 implements PluginInstance {
-  private _role: 'client' | 'server'
+  public static version = 2
+  _role: 'client' | 'server' // TODO best practice, role and _plugin should be private in order to keep account agnostic to it
   private _plugin: EthereumClientPlugin | EthereumServerPlugin
-  // Public so they're accessible to interenal account class
+  // Public so they're accessible to internal account class
   _ethereumAddress: string
   _web3: Web3
   _outgoingSettlementPeriod: BigNumber
@@ -41,6 +43,7 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
   _balance: {
     maximum: BigNumber
   }
+  _receiveOnly: boolean // TODO all this means if it should pre-emptively open a paychan on connect
   _store: any // Resolves incompatiblities with the older ilp-store-wrapper used by mini-accounts
   _log: Logger
   _channels: Map<string, string> // channelId -> accountName
@@ -72,8 +75,14 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
         .decimalPlaces(0, BigNumber.ROUND_FLOOR)
     }
 
+    // TODO fix this
+    this._receiveOnly = opts.receiveOnly || false
+
     this._store = new StoreWrapper(opts._store)
+    // TODO is there a better way to do this?
     this._log = opts._log || createLogger(`ilp-plugin-ethereum-${this._role}`)
+    /* tslint:disable-next-line:no-empty */
+    this._log.trace = this._log.trace || ((...msg: any[]) => {})
 
     this._role = opts.role || 'client'
     const InternalPlugin = this._role === 'client' ? EthereumClientPlugin : EthereumServerPlugin

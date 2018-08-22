@@ -3,13 +3,20 @@ import { PluginInstance } from './types'
 import BtpPlugin, { BtpPacket, BtpSubProtocol } from 'ilp-plugin-btp'
 const BtpPacket = require('btp-packet')
 import * as IlpPacket from 'ilp-packet'
+import EthereumPlugin = require('.')
 
 export default class EthereumClientPlugin extends BtpPlugin implements PluginInstance {
   private _account: EthereumAccount
+  private _master: EthereumPlugin
 
   // TODO Add type info for opts
   constructor (opts: any) {
-    super(opts)
+    super({
+      responseTimeout: 3500000, // TODO what is reasonable?
+      ...opts
+    })
+
+    this._master = opts.master
 
     this._account = new EthereumAccount({
       master: opts.master,
@@ -20,8 +27,11 @@ export default class EthereumClientPlugin extends BtpPlugin implements PluginIns
   }
 
   // TODO depending upon receiveOnly, open a paychan on connect
-  _connect (): Promise<void> {
-    return this._account.connect()
+  async _connect (): Promise<void> {
+    await this._account.connect()
+    if (!this._master._receiveOnly) {
+      return this._account.fundOutgoingChannel()
+    }
   }
 
   _handleData (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> {
