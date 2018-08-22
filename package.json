@@ -22,7 +22,7 @@
     "bignumber.js": "^7.2.1",
     "btp-packet": "^1.2.1",
     "ilp-logger": "^1.0.2",
-    "ilp-packet": "^2.2.0",
+    "ilp-packet": "^3.0.0",
     "ilp-plugin-btp": "github:kincaidoneil/ilp-plugin-btp",
     "ilp-plugin-mini-accounts": "github:kincaidoneil/ilp-plugin-mini-accounts",
     "minomy": "github:Kava-Labs/minomy"
