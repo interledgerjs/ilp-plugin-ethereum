@@ -1,6 +1,6 @@
 import EthereumAccount from './account'
 import { PluginInstance } from './types'
-import { BtpPacket, BtpSubProtocol } from 'ilp-plugin-btp'
+import { BtpPacket, BtpPacketData, BtpSubProtocol } from 'ilp-plugin-btp'
 import MiniAccountsPlugin from 'ilp-plugin-mini-accounts'
 import * as IlpPacket from 'ilp-packet'
 import EthereumPlugin = require('.')
@@ -9,7 +9,7 @@ export default class EthereumServerPlugin extends MiniAccountsPlugin implements 
   private _accounts: Map<string, EthereumAccount> // accountName -> account
   private _master: EthereumPlugin
 
-  // TODO add type info for options
+  // FIXME add type info for options
   constructor (opts: any) {
     super(opts)
 
@@ -25,8 +25,10 @@ export default class EthereumServerPlugin extends MiniAccountsPlugin implements 
       account = new EthereumAccount({
         accountName,
         master: this._master,
+        callMessage: (message: BtpPacket) =>
+          this._call('', message),
         sendMessage: (message: BtpPacket) =>
-          this._call(address, message)
+          this._handleOutgoingBtpPacket('', message)
       })
 
       this._accounts.set(accountName, account)
@@ -61,5 +63,5 @@ export default class EthereumServerPlugin extends MiniAccountsPlugin implements 
     return this._getAccount(from).disconnect()
   }
 
-  // TODO Add _disconnect (handler for when the plugin disconnects)
+  // FIXME Add _disconnect (handler for when the plugin disconnects)
 }
