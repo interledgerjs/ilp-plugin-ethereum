@@ -25,10 +25,8 @@ export default class EthereumServerPlugin extends MiniAccountsPlugin implements 
       account = new EthereumAccount({
         accountName,
         master: this._master,
-        callMessage: (message: BtpPacket) =>
-          this._call('', message),
         sendMessage: (message: BtpPacket) =>
-          this._handleOutgoingBtpPacket('', message)
+          this._call(address, message)
       })
 
       this._accounts.set(accountName, account)

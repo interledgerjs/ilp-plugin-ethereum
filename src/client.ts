@@ -21,10 +21,8 @@ export default class EthereumClientPlugin extends BtpPlugin implements PluginIns
     this._account = new EthereumAccount({
       master: opts.master,
       accountName: '', // TODO what should be here?
-      callMessage: (message: BtpPacket) =>
-        this._call('', message),
       sendMessage: (message: BtpPacket) =>
-        this._handleOutgoingBtpPacket('', message)
+        this._call('', message)
     })
   }
 
