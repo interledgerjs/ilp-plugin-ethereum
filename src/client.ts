@@ -7,7 +7,7 @@ import EthereumPlugin = require('.')
 
 export default class EthereumClientPlugin extends BtpPlugin implements PluginInstance {
   private _account: EthereumAccount
-  private _master: EthereumPlugin
+  private _master: EthereumPlugin // FIXME remove?
 
   // FIXME Add type info for opts
   constructor (opts: any) {
@@ -20,7 +20,7 @@ export default class EthereumClientPlugin extends BtpPlugin implements PluginIns
 
     this._account = new EthereumAccount({
       master: opts.master,
-      accountName: '', // TODO what should be here?
+      accountName: 'server', // FIXME what is the name of the server?
       sendMessage: (message: BtpPacket) =>
         this._call('', message)
     })
@@ -29,14 +29,15 @@ export default class EthereumClientPlugin extends BtpPlugin implements PluginIns
   async _connect (): Promise<void> {
     await this._account.connect()
     // FIXME Trigger attemptSettle auto-magically?
+    return this._account.attemptSettle()
   }
 
   _handleData (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> {
-    return this._account.handleData(message)
+    return this._account.handleData(message, this._dataHandler)
   }
 
   _handleMoney (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> {
-    return this._account.handleMoney(message)
+    return this._account.handleMoney(message, this._moneyHandler)
   }
 
   // FIXME Add error handling to catch ILP error packets in the response

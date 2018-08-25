@@ -1,11 +1,13 @@
 import { EventEmitter2 } from 'eventemitter2'
 import StoreWrapper from './store-wrapper'
-import createLogger = require('ilp-logger')
 import { Logger, PluginInstance, DataHandler, MoneyHandler } from './types'
 import EthereumClientPlugin from './client'
 import EthereumServerPlugin from './server'
 import Web3 = require('web3')
 import BigNumber from 'bignumber.js'
+
+import * as debug from 'debug'
+import createLogger = require('ilp-logger')
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 
@@ -71,17 +73,26 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
   _log: Logger
   _channels: Map<string, string> // channelId -> accountName
 
-  constructor (opts: EthereumPluginOpts = {
-    role: 'client',
-    ethereumAddress: '', // TODO ???
-    web3: new Web3, // TODO ???
-    balance: {
-      maximum:  new BigNumber(Infinity),
-      settleTo: new BigNumber(0),
-      minimum:  new BigNumber(-Infinity)
-    }
-  }) {
+  constructor (opts: EthereumPluginOpts) {
     super()
+
+    this._store = new StoreWrapper(opts._store)
+
+    this._role = opts.role || 'client'
+
+    // FIXME is there a better way to do this?
+    this._log = opts._log || createLogger(`ilp-plugin-ethereum-${this._role}`)
+    this._log.trace = this._log.trace || debug(`ilp-plugin-ethereum-${this._role}:trace`)
+
+    const InternalPlugin = this._role === 'client' ? EthereumClientPlugin : EthereumServerPlugin
+    this._plugin = new InternalPlugin({
+      ...opts,
+      master: this
+    })
+
+    this._plugin.on('connect', () => this.emitAsync('connect'))
+    this._plugin.on('disconnect', () => this.emitAsync('disconnect'))
+    this._plugin.on('error', e => this.emitAsync('error', e))
 
     this._ethereumAddress = opts.ethereumAddress
     this._web3 = opts.web3
@@ -114,38 +125,24 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
     }
 
     // Validate balance configuration: max >= settleTo > settleThreshold >= min
-    if (!this._balance.maximum.gt(this._balance.settleTo)) {
-      throw new Error('TODO')
+    if (!this._balance.maximum.gte(this._balance.settleTo)) {
+      throw new Error('Invalid balance configuration: maximum balance must be greater than or equal to settleTo')
     }
-    if (!this._balance.settleTo.gte(this._balance.settleThreshold)) {
-      throw new Error('TODO')
+    if (this._balance.settleThreshold && !this._balance.settleTo.gt(this._balance.settleThreshold)) {
+      throw new Error('Invalid balance configuration: settleTo must be greater than settleThreshold')
     }
-    if (!this._balance.settleThreshold.gte(this._balance.minimum)) {
-      throw new Error('TODO')
+    if (this._balance.settleThreshold && !this._balance.settleThreshold.gte(this._balance.minimum)) {
+      throw new Error('Invalid balance configuration: settleThreshold must be greateer than minimum balance')
     }
 
-    this._store = new StoreWrapper(opts._store)
-    // TODO is there a better way to do this?
-    this._log = opts._log || createLogger(`ilp-plugin-ethereum-${this._role}`)
-    /* tslint:disable-next-line:no-empty */
-    this._log.trace = this._log.trace || ((...msg: any[]) => {})
-
-    this._role = opts.role || 'client'
-    const InternalPlugin = this._role === 'client' ? EthereumClientPlugin : EthereumServerPlugin
-
-    this._plugin = new InternalPlugin({
-      ...opts,
-      master: this
-    })
-
-    this._plugin.on('connect', () => this.emitAsync('connect'))
-    this._plugin.on('disconnect', () => this.emitAsync('disconnect'))
-    this._plugin.on('error', e => this.emitAsync('error', e))
+    if (!this._balance.settleThreshold) {
+      this._log.trace(`No settle threshold configured; auto-settlement is disabled; plugin is in receive-only mode FIXME`)
+    }
   }
 
   async connect () {
     this._channels = new Map(await this._store.loadObject('channels'))
-    this._plugin.connect()
+    return this._plugin.connect()
   }
 
   async disconnect () {
