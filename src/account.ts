@@ -634,6 +634,23 @@ export default class EthereumAccount {
 
   // FIXME what should happen here?
   async disconnect (): Promise<void> {
+    // FIXME add naive claim on disconnect
+    const claim = this.account.bestIncomingClaim
+    if (claim) {
+      const channelId = claim.channelId
+      this.master._log.trace(`Attempting to claim channel ${channelId} for ${format(claim.value, Unit.Wei)}`)
+
+      const tx = await Minomy.closeChannel(this.master._web3, { channelId, claim })
+
+      const receipt = await this.master._web3.eth.sendTransaction(tx)
+
+      if (!receipt.status) {
+        this.master._log.trace(`Failed to claim channel ${channelId}: transaction reverted by EVM`)
+      } else {
+        this.master._log.trace(`Successfully claimed channel ${channelId} for account ${this.account.accountName}`)
+      }
+    }
+
     // clearInterval(this._watcher)
 
     // await this._persistChannels()
