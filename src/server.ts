@@ -1,6 +1,6 @@
 import EthereumAccount from './account'
 import { PluginInstance } from './types'
-import { BtpPacket, BtpPacketData, BtpSubProtocol } from 'ilp-plugin-btp'
+import { BtpPacket, BtpSubProtocol } from 'ilp-plugin-btp'
 import MiniAccountsPlugin from 'ilp-plugin-mini-accounts'
 import * as IlpPacket from 'ilp-packet'
 import EthereumPlugin = require('.')

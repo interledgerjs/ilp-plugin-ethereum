@@ -1,6 +1,6 @@
 import EthereumAccount, { requestId } from './account'
 import { PluginInstance } from './types'
-import BtpPlugin, { BtpPacket, BtpPacketData, BtpSubProtocol } from 'ilp-plugin-btp'
+import BtpPlugin, { BtpPacket, BtpSubProtocol } from 'ilp-plugin-btp'
 const BtpPacket = require('btp-packet')
 import * as IlpPacket from 'ilp-packet'
 import EthereumPlugin = require('.')
@@ -28,7 +28,7 @@ export default class EthereumClientPlugin extends BtpPlugin implements PluginIns
 
   async _connect (): Promise<void> {
     await this._account.connect()
-    // FIXME Trigger attemptSettle auto-magically?
+    await this._account.shareEthereumAddress()
     return this._account.attemptSettle()
   }
 

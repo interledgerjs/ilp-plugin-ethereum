@@ -5,6 +5,7 @@ import EthereumClientPlugin from './client'
 import EthereumServerPlugin from './server'
 import Web3 = require('web3')
 import BigNumber from 'bignumber.js'
+import { convert, Unit } from './account'
 
 import * as debug from 'debug'
 import createLogger = require('ilp-logger')
@@ -13,23 +14,25 @@ BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notat
 
 interface EthereumPluginOpts {
   role: 'client' | 'server'
-  // FIXME clarify, do these need to be the same wallet address?
   // Ethereum address of this account to tell peers to pay this at
-  // (should be default account in given Web3 instance)
   ethereumAddress: string
-  // Web3 1.0 instance
-  // Requires a default wallet account for signing transactions and messages
+  // Web3 1.0 instance with a default wallet account for signing transactions and messages
   web3: Web3
+  // Default amount to fund when opening a new channel or depositing to a depleted channel
+  // * gwei
+  outgoingChannelAmount?: BigNumber.Value
   // Minimum number of blocks for settlement period to accept a new incoming channel
   minIncomingSettlementPeriod?: BigNumber.Value
   // Number of blocks for settlement period used to create outgoing channels
   outgoingSettlementPeriod?: BigNumber.Value
   // Maximum allowed amount in gwei for incoming packets
+  // * gwei
   maxPacketAmount?: BigNumber.Value
   // Balance (positive) is amount in gwei the counterparty owes this instance
   // (negative balance implies this instance owes the counterparty)
   // Debits add to the balance; credits subtract from the balance
   // maximum >= settleTo > settleThreshold >= minimum
+  // * gwei
   balance?: {
     // Maximum balance counterparty owes this instance before further balance additions are rejected
     // e.g. settlements and forwarding of PREPARE packets with debits that increase balance above maximum would be rejected
@@ -49,28 +52,24 @@ interface EthereumPluginOpts {
 }
 
 class EthereumPlugin extends EventEmitter2 implements PluginInstance {
-  public static version = 2
-  _role: 'client' | 'server' // FIXME best practice, role and _plugin should be private in order to keep account agnostic to it
-  private _plugin: EthereumClientPlugin | EthereumServerPlugin
+  static readonly version = 2
+  private readonly _role: 'client' | 'server'
+  private readonly _plugin: EthereumClientPlugin | EthereumServerPlugin
   // Public so they're accessible to internal account class
-  _ethereumAddress: string
-  _web3: Web3
-  _outgoingSettlementPeriod: BigNumber
-  _minIncomingSettlementPeriod: BigNumber
-  _maxPacketAmount: BigNumber
-  // FIXME is there a way to consolidate this in all one place? idk
-  _balance: {
+  readonly _ethereumAddress: string
+  readonly _web3: Web3
+  readonly _outgoingChannelAmount: BigNumber // wei
+  readonly _outgoingSettlementPeriod: BigNumber // # of blocks
+  readonly _minIncomingSettlementPeriod: BigNumber // # of blocks
+  readonly _maxPacketAmount: BigNumber // gwei
+  readonly _balance: { // gwei
     maximum: BigNumber
     settleTo: BigNumber
     settleThreshold?: BigNumber
     minimum: BigNumber
-  } = {
-    maximum: new BigNumber(Infinity),
-    settleTo: new BigNumber(0),
-    minimum: new BigNumber(-Infinity)
   }
-  _store: any // Resolves incompatiblities with the older ilp-store-wrapper used by mini-accounts
-  _log: Logger
+  readonly _store: any // Resolves incompatiblities with the older ilp-store-wrapper used by mini-accounts
+  readonly _log: Logger
   _channels: Map<string, string> // channelId -> accountName
 
   constructor (opts: EthereumPluginOpts) {
@@ -80,7 +79,6 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
 
     this._role = opts.role || 'client'
 
-    // FIXME is there a better way to do this?
     this._log = opts._log || createLogger(`ilp-plugin-ethereum-${this._role}`)
     this._log.trace = this._log.trace || debug(`ilp-plugin-ethereum-${this._role}:trace`)
 
@@ -97,31 +95,37 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
     this._ethereumAddress = opts.ethereumAddress
     this._web3 = opts.web3
 
+    this._outgoingChannelAmount =
+      opts.outgoingChannelAmount
+        ? convert(opts.outgoingChannelAmount, Unit.Gwei, Unit.Wei)
+        : convert('0.001', Unit.Eth, Unit.Wei)
+      .abs().dp(0, BigNumber.ROUND_DOWN)
+
     // Sender can start a settling period at anytime (e.g., if receiver is unresponsive)
     // If the receiver doesn't claim funds within that period, sender gets entire channel value
 
     const INCOMING_SETTLEMENT_PERIOD = 7 * 24 * 60 * 60 / 15 // ~1 week, asuming, 15 sec block times
     this._minIncomingSettlementPeriod = new BigNumber(opts.minIncomingSettlementPeriod || INCOMING_SETTLEMENT_PERIOD)
-      .absoluteValue().decimalPlaces(0, BigNumber.ROUND_CEIL)
+      .abs().dp(0, BigNumber.ROUND_CEIL)
 
     const OUTGOING_SETTLEMENT_PERIOD = 1.25 * INCOMING_SETTLEMENT_PERIOD
     this._outgoingSettlementPeriod = new BigNumber(opts.outgoingSettlementPeriod || OUTGOING_SETTLEMENT_PERIOD)
-      .absoluteValue().decimalPlaces(0, BigNumber.ROUND_DOWN)
+      .abs().dp(0, BigNumber.ROUND_DOWN)
 
     this._maxPacketAmount = new BigNumber(opts.maxPacketAmount || Infinity)
-      .absoluteValue().decimalPlaces(0, BigNumber.ROUND_DOWN)
+      .abs().dp(0, BigNumber.ROUND_DOWN)
 
     this._balance = {
       maximum: new BigNumber((opts.balance && opts.balance.maximum) || Infinity)
-        .decimalPlaces(0, BigNumber.ROUND_FLOOR),
+        .dp(0, BigNumber.ROUND_FLOOR),
       settleTo: new BigNumber((opts.balance && opts.balance.settleTo) || 0)
-        .decimalPlaces(0, BigNumber.ROUND_FLOOR),
+        .dp(0, BigNumber.ROUND_FLOOR),
       settleThreshold: opts.balance && opts.balance.settleThreshold
         ? new BigNumber(opts.balance.settleThreshold)
-            .decimalPlaces(0, BigNumber.ROUND_FLOOR)
+            .dp(0, BigNumber.ROUND_FLOOR)
         : undefined,
       minimum: new BigNumber((opts.balance && opts.balance.minimum) || -Infinity)
-        .decimalPlaces(0, BigNumber.ROUND_FLOOR)
+        .dp(0, BigNumber.ROUND_FLOOR)
     }
 
     // Validate balance configuration: max >= settleTo > settleThreshold >= min
@@ -132,11 +136,11 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
       throw new Error('Invalid balance configuration: settleTo must be greater than settleThreshold')
     }
     if (this._balance.settleThreshold && !this._balance.settleThreshold.gte(this._balance.minimum)) {
-      throw new Error('Invalid balance configuration: settleThreshold must be greateer than minimum balance')
+      throw new Error('Invalid balance configuration: settleThreshold must be greater than minimum balance')
     }
 
     if (!this._balance.settleThreshold) {
-      this._log.trace(`No settle threshold configured; auto-settlement is disabled; plugin is in receive-only mode FIXME`)
+      this._log.trace(`Auto-settlement disabled: plugin is in receive-only mode since no settleThreshold was configured`)
     }
   }
 
