@@ -1,45 +1,128 @@
-# ILP Plugin Ethereum Asym Server
-> Server to Ethereum Asym Client
+# Interledger Ethereum Plugin
 
-- [Description](#description)
-- [Usage](#usage)
+Settle Interledger payments with ether and ERC-20 tokens using [Machinomy smart contracts](https://github.com/machinomy/machinomy) for unidirectional payment channels
 
-## Description
+## Get Started
 
-**This plugin is still under development. Don't use it for large amounts of money.**
+TODO
 
-This is an implementation of an ILP integration with Ethereum. It uses simple
-unidirectional payment channels on Ethereum, by making use of the
-[Machinomy](https://github.com/machinomy/machinomy) library.
+## Advanced
 
-One party must run this Asym Server, and then any number of clients can connect
-by using [Ethereum Asym
-Client](https://github.com/sharafian/ilp-plugin-ethereum-asym-client). Each
-client opens a payment channel to this server, and will immediately send a
-claim. This claim is to cover the transaction fee of the server opening a
-channel to the client. The end result is that the server and client have two
-payment channels, allowing either one to send and receive.
+### Install
 
-Interleger packets are passed over the websocket connection that the client and
-server share, and then are periodically settled by passing claims over the
-websocket connection. The [ILP
-Connector](https://github.com/interledgerjs/ilp-connector) will manage this
-logic for you.
-
-## Usage
-
-```sh
-export RINKEBY_PROVIDER_URL=https://rinkeby.infura.io/2LQpDUsVeDqOZ8hvLzti
-export SECRET=eepauZo4UTh2Iejuo9Aichahph0ooy5boojohtoh
-npm install
-DEBUG=* node scripts/server-infura.js
+```bash
+npm install ilp-plugin-ethereum
 ```
 
-## For testing purposes 
+### Direct Peering
 
-```sh
-export PROVIDER_URL=https://ropsten.infura.io/T1S8a0bkyrGD7jxJBgeH
-export SECRET="lazy glass net matter square melt fun diary network bean play deer"
-npm install
-DEBUG=* node test-infura-sell.js
+TODO
+
+### Client
+
+TODO
+
+### Server
+
+TODO -- I should probably explain the config, rather than example code...
+
+```javascript
+const EthereumPlugin = require('ilp-plugin-ethereum')
+const Web3 = require('web3')
+
+const web3 = new Web3('wss://mainnet.infura.io/ws')
+
+const server = new EthereumPlugin({
+  role: 'server',
+
+})
+
+
 ```
+
+## API
+
+Here are the available options to pass to the plugin. Additional configuration options are also inherited from [ilp-plugin-btp](https://github.com/interledgerjs/ilp-plugin-btp) if the plugin is a client, and [ilp-plugin-mini-accounts](https://github.com/interledgerjs/ilp-plugin-mini-accounts) if the plugin is a server.
+
+### ethereumAddress
+- **Required**
+- Type: `string`
+- Ethereum address for sender of outgoing chanenls and receiver of incoming channels
+
+### web3
+- **Required**
+- Type: [`Web3`](https://web3js.readthedocs.io/en/1.0/getting-started.html)
+- Instance of [Web3 1.0](https://web3js.readthedocs.io/en/1.0/getting-started.html) with a provider and an unlocked account corresponding to the `ethereumAddress` option
+
+Using [Infura](https://infura.io/) as a provider with private key:
+```javascript
+const Web3 = require('web3')
+const web3 = new Web3('wss://mainnet.infura.io/ws')
+web3.eth.accounts.wallet.add('0x3a0ef25c9e37b0bcb27deea570708b12b2939f7f703fe0caea03433b55806384')
+```
+
+Using a local Ethereum node with an unlocked account:
+```javascript
+const Web3 = require('web3')
+const web3 = new Web3('ws://localhost:8546')
+```
+
+### role
+- Type:
+  - `'client'` to allow only a single peer that is explicity specified
+  - `'server'` to enable multiple clients to openly connect to the plugin
+- Default: `'client'`
+
+### outgoingChannelAmount
+- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
+- Default: `40000000` gwei, or 0.04 ether
+- Amount in *gwei* to to use as a default to fund or deposit to an outgoing channel
+
+### outgoingSettlementPeriod
+- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
+- Default: `50400` blocks, or approximately 9 days, assuming 15 second blocks
+- Number of blocks for settlement period when opening new outgoing channels
+
+While the channel is open, the sender may begin the settlement period. If the receiver does not claim the channel before the specified number of blocks elapses and the settling period ends, all the funds can go back to the sender. Settling a channel can be useful if the receiver is unresponsive or excessive collateral is locked up.
+
+### minIncomingSettlementPeriod
+- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
+- Default: `40320` blocks, or approximately 1 week, assuming 15 second blocks
+- Minimum number of blocks for the settlement period in order to accept an incoming channel
+
+In case the sender starts settling, the receiver may want to allot themselves enough time to claim the channel. Incoming claims from channels with settlement periods below this floor will be rejected outright.
+
+### maxPacketAmount
+- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
+- Default: `Infinity`
+- Maximum amount in *gwei* above which an incoming packet should be rejected
+
+### balance
+
+The balance (positive) is the net amount the counterparty/peer owes an instance of the plugin. A negative balance implies the plugin owes money to the counterparty.
+
+All balance options are in *gwei*.
+
+TODO explain max > settleTo, etc
+
+#### maximum
+- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
+- Default: `Infinity`
+- TODO
+
+#### settleTo
+- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
+- Default: `0`
+- Settlement attempts will increase the balance to the settleTo amount
+
+#### settleThreshold
+- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
+- Automatically attempts to settle when the balance drops below this threshold
+- By default, auto settlement is disabled, and the plugin is in receive-only mode
+
+#### minimum
+- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
+- Default: `-Infinity`
+- TODO
+
+TODO: add _store / _log
