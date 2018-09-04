@@ -1,11 +1,13 @@
 import { EventEmitter2 } from 'eventemitter2'
-import StoreWrapper from './store-wrapper'
-import { Logger, PluginInstance, DataHandler, MoneyHandler } from './types'
-import EthereumClientPlugin from './client'
-import EthereumServerPlugin from './server'
+import StoreWrapper from './utils/store-wrapper'
+import { Logger, PluginInstance, DataHandler, MoneyHandler } from './utils/types'
 import Web3 = require('web3')
 import BigNumber from 'bignumber.js'
-import { convert, Unit } from './account'
+import BtpPlugin, { BtpPacket, BtpSubProtocol } from 'ilp-plugin-btp'
+import MiniAccountsPlugin from 'ilp-plugin-mini-accounts'
+import EthereumAccount, { requestId, convert, Unit } from './account'
+import * as IlpPacket from 'ilp-packet'
+const BtpPacket = require('btp-packet')
 
 import * as debug from 'debug'
 import createLogger = require('ilp-logger')
@@ -77,6 +79,7 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
 
     this._store = new StoreWrapper(opts._store)
 
+    // TODO Is this unclear? Should it be `server` | `client` OR `parent` | `child`? Should `peer` be an alias for child?
     this._role = opts.role || 'client'
 
     this._log = opts._log || createLogger(`ilp-plugin-ethereum-${this._role}`)
@@ -92,13 +95,15 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
     this._plugin.on('disconnect', () => this.emitAsync('disconnect'))
     this._plugin.on('error', e => this.emitAsync('error', e))
 
+    // TODO If no Web3 default account is set by default, maybe it should TRY to use that... (which would allow arbitrarily switching accounts if a connector wanted to) but default to ethereumAddress if one isn't set
+    // TODO How should address management work? Should we infer it from the web3 instance?
     this._ethereumAddress = opts.ethereumAddress
     this._web3 = opts.web3
 
     this._outgoingChannelAmount =
       opts.outgoingChannelAmount
         ? convert(opts.outgoingChannelAmount, Unit.Gwei, Unit.Wei)
-        : convert('0.001', Unit.Eth, Unit.Wei)
+        : convert('0.04', Unit.Eth, Unit.Wei)
       .abs().dp(0, BigNumber.ROUND_DOWN)
 
     // Sender can start a settling period at anytime (e.g., if receiver is unresponsive)
@@ -125,10 +130,11 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
             .dp(0, BigNumber.ROUND_FLOOR)
         : undefined,
       minimum: new BigNumber((opts.balance && opts.balance.minimum) || -Infinity)
-        .dp(0, BigNumber.ROUND_FLOOR)
+        .dp(0, BigNumber.ROUND_CEIL)
     }
 
     // Validate balance configuration: max >= settleTo > settleThreshold >= min
+    // TODO this is bad if maximum is less than 0, since that's the default settleTo!
     if (!this._balance.maximum.gte(this._balance.settleTo)) {
       throw new Error('Invalid balance configuration: maximum balance must be greater than or equal to settleTo')
     }
@@ -180,6 +186,138 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
   deregisterMoneyHandler () {
     return this._plugin.deregisterMoneyHandler()
   }
+}
+
+class EthereumClientPlugin extends BtpPlugin implements PluginInstance {
+  private _account: EthereumAccount
+  private _master: EthereumPlugin // FIXME remove?
+
+  // FIXME Add type info for opts
+  constructor (opts: any) {
+    super({
+      responseTimeout: 3500000, // FIXME what is reasonable?
+      ...opts
+    })
+
+    this._master = opts.master
+
+    this._account = new EthereumAccount({
+      master: opts.master,
+      accountName: 'server', // FIXME what is the name of the server?
+      sendMessage: (message: BtpPacket) =>
+        this._call('', message)
+    })
+  }
+
+  async _connect (): Promise<void> {
+    await this._account.connect()
+    await this._account.shareEthereumAddress()
+    return this._account.attemptSettle()
+  }
+
+  _handleData (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> {
+    return this._account.handleData(message, this._dataHandler)
+  }
+
+  _handleMoney (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> {
+    return this._account.handleMoney(message, this._moneyHandler)
+  }
+
+  // FIXME Add error handling to catch ILP error packets in the response
+  // Add hooks into sendData before and after sending a packet for balance updates and settlement, akin to mini-accounts
+  async sendData (buffer: Buffer): Promise<Buffer> {
+    const preparePacket = IlpPacket.deserializeIlpPacket(buffer)
+    this._account.beforeForward(preparePacket)
+
+    const response = await this._call('', {
+      type: BtpPacket.TYPE_MESSAGE,
+      requestId: await requestId(),
+      data: {
+        protocolData: [{
+          protocolName: 'ilp',
+          contentType: BtpPacket.MIME_APPLICATION_OCTET_STREAM,
+          data: buffer
+        }]
+      }
+    })
+
+    // FIXME What if there isn't an ILP response?
+    const ilpResponse = response.protocolData
+      .filter(p => p.protocolName === 'ilp')[0]
+    const responsePacket = IlpPacket.deserializeIlpPacket(ilpResponse.data)
+
+    await this._account.afterForwardResponse(preparePacket, responsePacket)
+
+    return ilpResponse
+      ? ilpResponse.data
+      : Buffer.alloc(0)
+  }
+
+  _disconnect (): Promise<void> {
+    return this._account.disconnect()
+  }
+}
+
+class EthereumServerPlugin extends MiniAccountsPlugin implements PluginInstance {
+  private _accounts: Map<string, EthereumAccount> // accountName -> account
+  private _master: EthereumPlugin
+
+  // FIXME add type info for options
+  constructor (opts: any) {
+    super(opts)
+
+    this._master = opts.master
+    this._accounts = new Map()
+  }
+
+  _getAccount (address: string) {
+    const accountName = this.ilpAddressToAccount(address)
+    let account = this._accounts.get(accountName)
+
+    if (!account) {
+      account = new EthereumAccount({
+        accountName,
+        master: this._master,
+        sendMessage: (message: BtpPacket) =>
+          this._call(address, message)
+      })
+
+      this._accounts.set(accountName, account)
+    }
+
+    return account
+  }
+
+  _connect (address: string, message: BtpPacket): Promise<void> {
+    return this._getAccount(address).connect()
+  }
+
+  _handleCustomData = async (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> =>
+    this._getAccount(from).handleData(message, this._dataHandler)
+
+  _handleMoney (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> {
+    return this._getAccount(from).handleMoney(message, this._moneyHandler)
+  }
+
+  // TODO This causes an error when Stream sends an ILDCP request via sendData on the server:
+  // sendPrepare is called before mini-accounts handles ILDCP requests,
+  // and peer.config fails to resolve an account
+  _sendPrepare (destination: string, preparePacket: IlpPacket.IlpPacket) {
+    // return this._getAccount(destination).beforeForward(preparePacket)
+  }
+
+  _handlePrepareResponse = async (
+    destination: string,
+    responsePacket: IlpPacket.IlpPacket,
+    preparePacket: IlpPacket.IlpPacket
+  ): Promise<void> =>
+    this._getAccount(destination).afterForwardResponse(preparePacket, responsePacket)
+
+  _close (from: string): Promise<void> {
+    return this._getAccount(from).disconnect()
+  }
+
+  // FIXME Add _disconnect (handler for when the plugin disconnects)
 }
 
 export = EthereumPlugin
