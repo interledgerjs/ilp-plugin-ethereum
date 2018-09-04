@@ -18,6 +18,7 @@ import {
   generateTx,
   isSettling
 } from './utils/contract'
+import Mutex from './utils/queue'
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 
@@ -68,6 +69,8 @@ export default class EthereumAccount {
   private master: EthereumPlugin
   // Send the given BTP packet message to this counterparty
   private sendMessage: (message: BtpPacket) => Promise<BtpPacketData>
+  // Queue of all incoming BTP transfer packets/settlements
+  private incomingSettlements = new Mutex()
 
   constructor (opts: {
     accountName: string,
@@ -187,6 +190,7 @@ export default class EthereumAccount {
     }
   }
 
+  // TODO Should I use a queue for this instead of SettleState, or not?
   async attemptSettle (): Promise<void> {
     if (this.account.settling !== SettleState.NotSettling) {
       this.account.settling = SettleState.QueuedSettle
@@ -308,7 +312,7 @@ export default class EthereumAccount {
       }
 
       // Note: channel value should be based on the settle amount, but doesn't affect the settle amount!
-      // Only on-chain tx fees and payment channel claims should impact the settle amount
+      // Only on-chain tx fees and outgoing payment channel claims should impact the settle amount
       const value = BigNumber.max(settlementBudget, this.master._outgoingChannelAmount)
 
       if (requiresNewChannel) {
@@ -554,8 +558,12 @@ export default class EthereumAccount {
     return []
   }
 
-  // FIXME Need a better to handle cases where the claim is invalid rather than throwing errors? What about non-intentional errors?
   async handleMoney (message: BtpPacket, moneyHandler?: MoneyHandler): Promise<BtpSubProtocol[]> {
+    return this.incomingSettlements.synchronize(() => this.handleSettlement(message, moneyHandler))
+  }
+
+  // FIXME Need a better to handle cases where the claim is invalid rather than throwing errors? What about non-intentional errors?
+  async handleSettlement (message: BtpPacket, moneyHandler?: MoneyHandler): Promise<BtpSubProtocol[]> {
     try {
       // FIXME can I use the ilpAndCustomToProtocolData instead?
       const minomy = getSubprotocol(message, 'minomy')
