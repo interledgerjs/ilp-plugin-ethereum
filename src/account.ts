@@ -156,7 +156,7 @@ export default class EthereumAccount {
     this.startChannelWatcher()
 
     if (this.master._settleOnConnect) {
-      this.outgoingSettlements.runExclusive(() => this.attemptSettle())
+      return this.outgoingSettlements.runExclusive(() => this.attemptSettle())
     }
   }
 
