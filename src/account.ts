@@ -22,13 +22,6 @@ import Mutex from './utils/queue'
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 
-// Is the plugin presently attempting to settle?
-enum SettleState {
-  NotSettling,
-  Settling,
-  QueuedSettle // Already settling, but there was another attempt to settle simultaneously
-}
-
 export enum Unit { Eth = 18, Gwei = 9, Wei = 0 }
 
 export const convert = (num: BigNumber.Value, from: Unit, to: Unit): BigNumber =>
@@ -45,14 +38,15 @@ export const requestId = async () =>
 
 export default class EthereumAccount {
   private account: {
-    // Is this instance in the process of sending a paychan update or completing an on-chain funding transaction?
-    settling: SettleState
-    // Is this account blocked/closed (unable to send money/access balance)?
-    isBlocked: boolean
     // Hash/account identifier in ILP address
     accountName: string
-    // Net amount in gwei the counterparty owes the this instance (positive), including secured paychan claims
+    // Net amount in gwei the counterparty owes the this instance, including secured paychan claims
+    // - Negative implies this instance owes the counterparty
     balance: BigNumber
+    // Sum of all fulfilled packets owed to the counterparty that have yet to be paid out (always >= 0)
+    // - The balance limits when settlements happen, but this limits the settlement amount so we don't send
+    //   all the clients' money directly back to them!
+    payoutAmount: BigNumber
     // Ethereum address counterparty should be paid at
     // - Does not pertain to address counterparty sends from
     // - Must be linked for the lifetime of the account
@@ -62,15 +56,20 @@ export default class EthereumAccount {
     // Greatest claim/payment from this -> counterparty
     bestOutgoingClaim?: Claim
     // Greatest claim/payment from counterparty -> this
-    // Used for channelId, since a paychan wouldn't be linked without a claim
+    // - Also used for channelId, since a paychan wouldn't be linked without a claim
     bestIncomingClaim?: Claim
   }
   // Expose access to common configuration across accounts
   private master: EthereumPlugin
   // Send the given BTP packet message to this counterparty
   private sendMessage: (message: BtpPacket) => Promise<BtpPacketData>
-  // Queue of all incoming BTP transfer packets/settlements
+  // Queue to handle all incoming settlements/BTP transfers
   private incomingSettlements = new Mutex()
+  // Queue to handle all outgoing settlements
+  // If one settlement is occuring, only a single one can be queued
+  private outgoingSettlements = new Mutex(1)
+  // Timer/interval for channel watcher to claim incoming, settling channels
+  private watcher: NodeJS.Timer
 
   constructor (opts: {
     accountName: string,
@@ -78,20 +77,24 @@ export default class EthereumAccount {
     // Wrap _call/expose method to send WS messages
     sendMessage: (message: BtpPacket) => Promise<BtpPacketData>
   }) {
-    // No change detection after `connect` is called
-    this.account = {
-      settling: SettleState.NotSettling,
-      isBlocked: false,
-      accountName: opts.accountName,
-      balance: new BigNumber(0)
-    }
-
     this.master = opts.master
-
     this.sendMessage = opts.sendMessage
+
+    // No change detection until after `connect` is called
+    this.account = {
+      accountName: opts.accountName,
+      balance: new BigNumber(0),
+      payoutAmount: this.master._balance.settleTo.gt(0)
+        // If we're prefunding, we don't care about total fulfills
+        // Since we take the min of this and the settleTo/settleThreshold delta, this
+        // essentially disregards the payout amount
+        ? new BigNumber(Infinity)
+        // If we're settling up after fulfills, then we do care
+        : new BigNumber(0)
+    }
   }
 
-  addBalance (amount: BigNumber) {
+  private addBalance (amount: BigNumber) {
     if (amount.isZero()) return
 
     const maximum = this.master._balance.maximum
@@ -106,7 +109,7 @@ export default class EthereumAccount {
     this.account.balance = newBalance
   }
 
-  subBalance (amount: BigNumber) {
+  private subBalance (amount: BigNumber) {
     if (amount.isZero()) return
 
     const minimum = this.master._balance.minimum
@@ -122,8 +125,18 @@ export default class EthereumAccount {
   }
 
   async connect () {
-    const accountName = this.account.accountName
-    const savedAccount = await this.master._store.loadObject(`account:${accountName}`)
+    const accountKey = `${this.account.accountName}:account`
+    await this.master._store.loadObject(accountKey)
+    const savedAccount = this.master._store.getObject(accountKey) || {}
+
+    // Parse balances, since they're non-primitives
+    // (otherwise the defaults from the constructor are used)
+    if (typeof savedAccount.balance === 'string') {
+      savedAccount.balance = new BigNumber(savedAccount.balance)
+    }
+    if (typeof savedAccount.payoutAmount === 'string') {
+      savedAccount.payoutAmount = new BigNumber(savedAccount.payoutAmount)
+    }
 
     this.account = new Proxy({
       ...this.account,
@@ -131,7 +144,7 @@ export default class EthereumAccount {
     }, {
       set: (account, key, val) => {
         // Commit the changes to the configured store
-        this.master._store.set(this.account.accountName, JSON.stringify({
+        this.master._store.set(accountKey, JSON.stringify({
           ...account,
           [key]: val
         }))
@@ -140,64 +153,88 @@ export default class EthereumAccount {
       }
     })
 
-    // TODO Add back channel watcher -- for individual accounts?
+    this.startChannelWatcher()
+
+    if (this.master._settleOnConnect) {
+      this.outgoingSettlements.runExclusive(() => this.attemptSettle())
+    }
   }
 
   // Inform the peer what address this instance should be paid at
   // & request the Ethereum address the peer wants to be paid at
-  async shareEthereumAddress (): Promise<void> {
-    const response = await this.sendMessage({
-      type: BtpPacket.TYPE_MESSAGE,
-      requestId: await requestId(),
-      data: {
-        protocolData: [{
-          protocolName: 'info',
-          contentType: BtpPacket.MIME_APPLICATION_JSON,
-          data: Buffer.from(JSON.stringify({
-            ethereumAddress: this.master._ethereumAddress
-          }))
-        }]
-      }
-    })
+  // If we already know the peer's address, just return
+  private async fetchEthereumAddress (): Promise<void> {
+    if (typeof this.account.ethereumAddress === 'string') return
+    try {
+      const response = await this.sendMessage({
+        type: BtpPacket.TYPE_MESSAGE,
+        requestId: await requestId(),
+        data: {
+          protocolData: [{
+            protocolName: 'info',
+            contentType: BtpPacket.MIME_APPLICATION_JSON,
+            data: Buffer.from(JSON.stringify({
+              ethereumAddress: this.master._ethereumAddress
+            }))
+          }]
+        }
+      })
 
-    const info = response.protocolData.find((p: BtpSubProtocol) => p.protocolName === 'info')
-    if (info) {
-      this.linkEthereumAddress(info)
-    } else {
-      this.master._log.trace(`Failed to link Ethereum address: BTP packet did not include any 'info' subprotocol data`)
+      const info = response.protocolData.find((p: BtpSubProtocol) => p.protocolName === 'info')
+
+      if (info) {
+        this.linkEthereumAddress(info)
+      } else {
+        this.master._log.trace(`Failed to link Ethereum address: BTP response did not include any 'info' subprotocol data`)
+      }
+    } catch (err) {
+      this.master._log.trace(`Failed to exchange Ethereum addresses: ${err.message}`)
     }
   }
 
-  linkEthereumAddress (info: BtpSubProtocol): void {
-    // FIXME Catch error if this is invalid JSON
-    // FIXME also validate that ethereumAddress is a string
-    const { ethereumAddress } = JSON.parse(info.data.toString())
+  private linkEthereumAddress (info: BtpSubProtocol): void {
+    try {
+      const { ethereumAddress } = JSON.parse(info.data.toString())
 
-    if (this.account.ethereumAddress) {
-      if (this.account.ethereumAddress.toLowerCase() === ethereumAddress.toLowerCase()) {
-        return
+      if (!Web3.utils.isAddress(ethereumAddress)) {
+        return this.master._log.trace(`Failed to link Ethereum address: ${ethereumAddress} is not a valid address`)
       }
 
-      return this.master._log.trace(`Cannot link Ethereum address ${ethereumAddress} to account ${this.account.accountName}: ` +
-        `${this.account.ethereumAddress} is already linked for the lifetime of the account`)
-    }
+      const currentAddress = this.account.ethereumAddress
+      if (currentAddress) {
+        // Don't log if it's the same address that's already linked...we don't care
+        if (currentAddress.toLowerCase() === ethereumAddress.toLowerCase()) return
 
-    if (Web3.utils.isAddress(ethereumAddress)) {
+        return this.master._log.trace(`Cannot link Ethereum address ${ethereumAddress} to account ${this.account.accountName}: ` +
+          `${currentAddress} is already linked for the lifetime of the account`)
+      }
+
       this.account.ethereumAddress = ethereumAddress
       this.master._log.trace(`Successfully linked Ethereum address ${ethereumAddress} to account ${this.account.accountName}`)
-    } else {
-      this.master._log.trace(`Failed to link Ethereum address: ${ethereumAddress} is not a valid address`)
+    } catch (err) {
+      this.master._log.trace(`Failed to link Ethereum address: ${err.message}`)
     }
   }
 
-  // TODO Should I use a queue for this instead of SettleState, or not?
+  /**
+   * How settlement works:
+   * - Determine the maximum amount to settle, or settlement "budget", and immediately add it to the balance
+   * - Each settlement operation will spend down from this amount, subtracting sent claims and fees
+   * - `sendClaim` and `fundOutgoingChannel` take the settlement budget, and return the amount leftover
+   *    - e.g. if we couldn't open a channel because the fee > amountToSettle, it will error and just
+   *      return the original amount
+   *    - e.g. if it sent a claim for the entire amountToSettle, it will return 0 because there's
+   *      nothing leftover
+   * - This is really cool, because the amount to settle can "flow" from one settlement method to another,
+   *   as each of them spend down from it!
+   * - The catch: before updating the settlement budget, the methods should guard against it going below 0.
+   *   Otherwise, they should just return the original budget and reject the promise (spiking out of
+   *   any further settlement)
+   * - After all settlement operations, we refund the amount leftover (e.g. not spent) to the balance
+   * - Keeping the settlement methods "pure" with respect to the balance of the account greatly
+   *   simplifies the balance logic (but does require committing the balance first, then refunding)
+   */
   async attemptSettle (): Promise<void> {
-    if (this.account.settling !== SettleState.NotSettling) {
-      this.account.settling = SettleState.QueuedSettle
-      return this.master._log.trace('Cannot settle: another settlement was occuring simultaneously')
-    }
-    this.account.settling = SettleState.Settling
-
     let amountLeftover = new BigNumber(0)
     const settleThreshold = this.master._balance.settleThreshold
     try {
@@ -211,30 +248,16 @@ export default class EthereumAccount {
         return this.master._log.trace(`Cannot settle: balance of ${format(this.account.balance, Unit.Gwei)} is not below settle threshold of ${format(settleThreshold, Unit.Gwei)}`)
       }
 
-      /**
-       * How settlement works:
-       * - Determine the maximum amount to settle for, and immediately add it to the balance
-       * - Each settlement operation will "spend down" from this amount, subtracting sent claims and fees
-       * - `sendClaim` and `fundOutgoingChannel` take the amount to settle, and return the amount leftover
-       *    - e.g. if we couldn't open a channel because the fee > amountToSettle, it will error and just
-       *      return the original amount
-       *    - e.g. if it sent a claim for the entire amountToSettle, it will return 0 because there's
-       *      nothing leftover
-       * - This is really cool, because the amount to settle can "flow" from one settlement method to another,
-       *   as each of them spend down from it!
-       * - The catch: before updating the amountToSettle, the methods should always check that it wouldn't
-       *   go below 0, otherwise it should reject the promise (spiking out of any futher settlement)
-       *   and return the amount leftover before it tried to spend more
-       * - After all settlement operations, we refund the amount leftover (e.g. not spent) to the balance
-       * - Keeping the settlement methods "pure" with respect to the balance of the account greatly
-       *   simplifies the balance logic (but does require committing the balance first, then refunding)
-       * - Subtracting from the balance at the end also attempts settlement again, which is good:
-       *   if we received money during this settlement, we blocked that settlement operation
-       */
+      let settlementBudget = BigNumber.min(
+        this.master._balance.settleTo.minus(this.account.balance),
+        // If we're not prefunding, the amount should be limited by the total packets we've fulfilled
+        // If we're prefunding, the payoutAmount is infinity, so it doesn't affect the amount to settle
+        this.account.payoutAmount
+      )
 
       // This should never error, since settleTo < maximum
-      let settlementBudget = this.master._balance.settleTo.minus(this.account.balance)
       this.addBalance(settlementBudget)
+      this.account.payoutAmount = this.account.payoutAmount.minus(settlementBudget)
 
       // Convert gwei to wei
       settlementBudget = convert(settlementBudget, Unit.Gwei, Unit.Wei).dp(0, BigNumber.ROUND_FLOOR)
@@ -260,31 +283,25 @@ export default class EthereumAccount {
       let amountSettled = settlementBudget.minus(amountLeftover)
       if (amountSettled.gt(0)) {
         this.master._log.trace(`Settle attempt complete: spent total of ${format(amountSettled, Unit.Wei)} settling, ` +
-          `refunding ${format(amountLeftover, Unit.Wei)} back to balance for account ${this.account.accountName}`)
+          `refunding ${format(amountLeftover, Unit.Wei)} back to balance with ${this.account.accountName}`)
       } else if (amountSettled.isZero()) {
         this.master._log.trace(`Settle attempt complete: none of budget spent, ` +
-          `refunding ${format(amountLeftover, Unit.Wei)} back to balance for account ${this.account.accountName}`)
+          `refunding ${format(amountLeftover, Unit.Wei)} back to balance with ${this.account.accountName}`)
       } else {
-        this.master._log.error(`Critical settlement error: spent ${format(amountSettled, Unit.Wei)}, `
-          + `more than budget of ${format(settlementBudget, Unit.Wei)} for account ${this.account.accountName}`)
+        this.master._log.error(`Critical settlement error: spent ${format(amountSettled, Unit.Wei)}, ` +
+          `more than budget of ${format(settlementBudget, Unit.Wei)} with ${this.account.accountName}`)
       }
     } catch (err) {
       this.master._log.error(`Failed to settle: ${err.message}`)
     } finally {
       amountLeftover = convert(amountLeftover, Unit.Wei, Unit.Gwei).dp(0, BigNumber.ROUND_FLOOR)
+
       this.subBalance(amountLeftover)
-
-      if (this.account.settling === SettleState.QueuedSettle as SettleState) {
-        this.account.settling = SettleState.NotSettling
-
-        return this.attemptSettle()
-      } else {
-        this.account.settling = SettleState.NotSettling
-      }
+      this.account.payoutAmount = this.account.payoutAmount.plus(amountLeftover)
     }
   }
 
-  async fundOutgoingChannel (settlementBudget: BigNumber): Promise<BigNumber> {
+  private async fundOutgoingChannel (settlementBudget: BigNumber): Promise<BigNumber> {
     try {
       // Determine if an on-chain funding transaction needs to occur
       let requiresNewChannel = false
@@ -316,6 +333,7 @@ export default class EthereumAccount {
       const value = BigNumber.max(settlementBudget, this.master._outgoingChannelAmount)
 
       if (requiresNewChannel) {
+        await this.fetchEthereumAddress()
         if (!this.account.ethereumAddress) {
           this.master._log.trace(`Failed to open channel: no Ethereum address is linked to account ${this.account.accountName}`)
           return Promise.reject(settlementBudget)
@@ -396,14 +414,12 @@ export default class EthereumAccount {
     }
   }
 
-  async sendClaim (settlementBudget: BigNumber): Promise<BigNumber> {
+  private async sendClaim (settlementBudget: BigNumber): Promise<BigNumber> {
     try {
       if (!this.account.outgoingChannelId) {
         this.master._log.trace(`Cannot send claim to ${this.account.accountName}: no channel is linked`)
         return settlementBudget
       }
-
-      // FIXME Is it possible this will error since the block hasn't propogated yet?
 
       const channel = await fetchChannel(this.master._web3, this.account.outgoingChannelId)
       if (!channel) {
@@ -411,7 +427,8 @@ export default class EthereumAccount {
         return settlementBudget
       }
 
-      // FIXME Even if we start settling the channel, claims can still be sent through. How should this be handled?
+      // Even if the channel is settling, continue to send claims: assuming this plugin is not malicious,
+      // sending a better claim is good, because it may incentivize the receiver to claim the channel
 
       // Greatest claim value/total amount we've sent the receiver
       const spent = new BigNumber(this.account.bestOutgoingClaim ? this.account.bestOutgoingClaim.value : 0)
@@ -444,7 +461,8 @@ export default class EthereumAccount {
         value: new BigNumber(value).toString()
       }
 
-      this.master._log.trace(`Sending claim for total of ${format(value, Unit.Wei)}, incremented by ${format(claimIncrement, Unit.Wei)}, to ${this.account.accountName}`)
+      this.master._log.trace(`Sending claim for total of ${format(value, Unit.Wei)}, ` +
+        `incremented by ${format(claimIncrement, Unit.Wei)}, to ${this.account.accountName}`)
       this.account.bestOutgoingClaim = claim
 
       // Since claimIncrement <= settlementBudget, new budget should always be >= 0
@@ -457,7 +475,7 @@ export default class EthereumAccount {
         data: {
           amount: convert(value, Unit.Wei, Unit.Gwei).toFixed(0, BigNumber.ROUND_CEIL),
           protocolData: [{
-            protocolName: 'minomy',
+            protocolName: 'machinomy',
             contentType: BtpPacket.MIME_APPLICATION_JSON,
             data: Buffer.from(JSON.stringify(claim))
           }]
@@ -475,7 +493,6 @@ export default class EthereumAccount {
   }
 
   async handleData (message: BtpPacket, dataHandler?: DataHandler): Promise<BtpSubProtocol[]> {
-    // FIXME just use ilp to custom? But I don't have access to that... can I import it?
     const info = getSubprotocol(message, 'info')
     const ilp = getSubprotocol(message, 'ilp')
 
@@ -492,17 +509,12 @@ export default class EthereumAccount {
       }]
     }
 
-    // Handle ILP PREPARE packets
-    // Any response packets (FULFILL or REJECT) should come from data handler response,
-    // not wrapped in a BTP message (connector/data handler would throw an error anyways?)
+    // Handle incoming ILP PREPARE packets from peer
+    // plugin-btp handles correlating the response packets for the dataHandler
     if (ilp && ilp.data[0] === IlpPacket.Type.TYPE_ILP_PREPARE) {
       try {
         const { expiresAt, amount } = IlpPacket.deserializeIlpPrepare(ilp.data)
         const amountBN = new BigNumber(amount)
-
-        if (this.account.isBlocked) {
-          throw new IlpPacket.Errors.UnreachableError('Account has been closed.')
-        }
 
         if (amountBN.gt(this.master._maxPacketAmount)) {
           throw new IlpPacket.Errors.AmountTooLargeError('Packet size is too large.', {
@@ -527,7 +539,8 @@ export default class EthereumAccount {
           new Promise<Buffer>(resolve => {
             timer = setTimeout(() => {
               resolve(
-                // FIXME no access to _prefix right now -- but would that leak info anyways? do you want that? idk
+                // Opinion: the triggeredBy address isn't useful because upstream connectors can modify
+                // it without any way for downstream nodes to know (even if we trust our direct peers)
                 IlpPacket.errorToReject('', {
                   ilpErrorCode: 'R00',
                   message: `Expired at ${new Date().toISOString()}`
@@ -538,19 +551,16 @@ export default class EthereumAccount {
           // Forward the packet to data handler, wait for response
           dataHandler(ilp.data)
         ])
-        // FIXME
-        // @ts-ignore
-        clearTimeout(timer)
+        clearTimeout(timer!)
 
         if (response[0] === IlpPacket.Type.TYPE_ILP_REJECT) {
           this.subBalance(amountBN)
         } else if (response[0] === IlpPacket.Type.TYPE_ILP_FULFILL) {
-          this.master._log.trace(`Received FULFILL in response to forwarded PREPARE`)
+          this.master._log.trace(`Received FULFILL from data handler in response to forwarded PREPARE`)
         }
 
         return ilpAndCustomToProtocolData({ ilp: response })
       } catch (err) {
-        // FIXME no access to _prefix -- should the ILP address be passed in? errorToReject(this._prefix, ...)
         return ilpAndCustomToProtocolData({ ilp: IlpPacket.errorToReject('', err) })
       }
     }
@@ -559,19 +569,17 @@ export default class EthereumAccount {
   }
 
   async handleMoney (message: BtpPacket, moneyHandler?: MoneyHandler): Promise<BtpSubProtocol[]> {
-    return this.incomingSettlements.synchronize(() => this.handleSettlement(message, moneyHandler))
+    return this.incomingSettlements.runExclusive(() => this.handleSettlement(message, moneyHandler))
   }
 
-  // FIXME Need a better to handle cases where the claim is invalid rather than throwing errors? What about non-intentional errors?
-  async handleSettlement (message: BtpPacket, moneyHandler?: MoneyHandler): Promise<BtpSubProtocol[]> {
+  private async handleSettlement (message: BtpPacket, moneyHandler?: MoneyHandler): Promise<BtpSubProtocol[]> {
     try {
-      // FIXME can I use the ilpAndCustomToProtocolData instead?
-      const minomy = getSubprotocol(message, 'minomy')
+      const machinomy = getSubprotocol(message, 'machinomy')
 
-      if (minomy) {
-        this.master._log.trace(`Handling Minomy claim for account ${this.account.accountName}`)
+      if (machinomy) {
+        this.master._log.trace(`Handling Machinomy claim for account ${this.account.accountName}`)
 
-        const claim = JSON.parse(minomy.data.toString())
+        const claim = JSON.parse(machinomy.data.toString())
 
         const hasValidSchema = claim
           && typeof claim.value === 'string'
@@ -595,9 +603,7 @@ export default class EthereumAccount {
           throw new Error(`channel is already settled or doesn't exist`)
         }
 
-        // Even if the channel is settling, still accept the claim: we don't mind if they send us more money!
-
-        // FIXME this could be dangerous if this is implemented even slightly differently from the contract call
+        // Even if the sender started settling, still accept the claim: we don't mind if they send us more money!
 
         const contractAddress = await getContractAddress(this.master._web3)
         // @ts-ignore http://web3js.readthedocs.io/en/1.0/web3-utils.html#soliditysha3
@@ -613,7 +619,8 @@ export default class EthereumAccount {
         }
 
         const oldClaimValue = new BigNumber(oldClaim ? oldClaim.value : 0)
-        const claimIncrement = BigNumber.min(channel.value, claim.value).minus(oldClaimValue)
+        const newClaimValue = BigNumber.min(channel.value, claim.value)
+        let claimIncrement = newClaimValue.minus(oldClaimValue)
         if (claimIncrement.eq(0)) {
           this.master._log.trace(`Disregarding incoming claim: value of ${format(claim.value, Unit.Wei)} is same as previous claim`)
           // Respond to the request normally, not with an error:
@@ -626,8 +633,13 @@ export default class EthereumAccount {
 
         // If no channel is linked to this account, perform additional validation
         if (!oldClaim) {
-          const isLinked = this.master._channels.has(claim.channelId)
-          if (isLinked) {
+          // Each channel key is a mapping of channelId -> accountName to ensure no channel can be linked to multiple accounts
+          // No race condition: a new linked channel will be cached at the end of this closure
+          const channelKey = `${claim.channelId}:incoming-channel`
+          await this.master._store.load(channelKey)
+          const linkedAccount = this.master._store.get(channelKey)
+          const canLinkChannel = !linkedAccount || linkedAccount === this.account.accountName
+          if (!canLinkChannel) {
             throw new Error(`channel ${claim.channelId} is already linked to a different account`)
           }
 
@@ -635,7 +647,7 @@ export default class EthereumAccount {
           // (only check for new channels, not per claim, in case the server restarts and changes config)
           const amReceiver = channel.receiver.toLowerCase() === this.master._ethereumAddress.toLowerCase()
           if (!amReceiver) {
-            throw new Error(`channel ${claim.channelId} is not to the server address ${this.master._ethereumAddress}`)
+            throw new Error(`the recipient for incoming channel ${claim.channelId} is not ${this.master._ethereumAddress}`)
           }
 
           // Confirm the settling period for the channel is above the minimum
@@ -645,7 +657,14 @@ export default class EthereumAccount {
               + `below floor of ${this.master._minIncomingSettlementPeriod} blocks`)
           }
 
-          this.master._channels.set(claim.channelId, this.account.accountName)
+          // Deduct the initiation fee (e.g. this could be used to cover the cost of the claim tx to close the channel)
+          claimIncrement = claimIncrement.minus(this.master._incomingChannelFee)
+          if (claimIncrement.lt(0)) {
+            throw new Error(`claim value of ${format(newClaimValue, Unit.Wei)} is insufficient to cover the initiation fee of ` +
+              `${format(this.master._incomingChannelFee, Unit.Wei)}`)
+          }
+
+          this.master._store.set(channelKey, this.account.accountName)
           this.master._log.trace(`Incoming channel ${claim.channelId} is now linked to account ${this.account.accountName}`)
         }
 
@@ -653,7 +672,6 @@ export default class EthereumAccount {
         this.master._log.info(`Accepted incoming claim from account ${this.account.accountName} for ${format(claimIncrement, Unit.Wei)}`)
 
         const amount = convert(claimIncrement, Unit.Wei, Unit.Gwei).dp(0, BigNumber.ROUND_DOWN)
-
         this.subBalance(amount)
 
         if (typeof moneyHandler !== 'function') {
@@ -662,177 +680,108 @@ export default class EthereumAccount {
 
         moneyHandler(amount.toString())
       } else {
-        throw new Error(`BTP TRANSFER packet did not include any 'minomy' subprotocol data`)
+        throw new Error(`BTP TRANSFER packet did not include any 'machinomy' subprotocol data`)
       }
 
       return []
     } catch (err) {
       this.master._log.trace(`Failed to validate claim: ${err.message}`)
       // Don't expose internal errors: this could be problematic if an error wasn't intentionally thrown
-      // TODO why does this trigger a stack trace?
       throw new Error('Invalid claim')
     }
   }
 
-  // FIXME need a better name -- explain why no balance is necessary
-  beforeForward (preparePacket: IlpPacket.IlpPacket): void {
-    if (this.account.isBlocked) {
-      throw new IlpPacket.Errors.UnreachableError('Account has been closed')
-    }
+  // Handle the response from a forwarded ILP PREPARE
+  handlePrepareResponse (preparePacket: IlpPacket.IlpPacket, responsePacket: IlpPacket.IlpPacket): void {
+    if (responsePacket.type !== IlpPacket.Type.TYPE_ILP_FULFILL) return
 
-    // FIXME add a log
-  }
-
-  // FIXME think of a better name
-  async afterForwardResponse (preparePacket: IlpPacket.IlpPacket, responsePacket: IlpPacket.IlpPacket): Promise<void> {
-    if (responsePacket.type !== IlpPacket.Type.TYPE_ILP_FULFILL) {
-      return
-    }
-
-    // FIXME is this text correct?
-    this.master._log.trace(`Handling a FULFILL in response to the forwarded PREPARE, attempting settlement`)
+    this.master._log.trace(`Received a FULFILL in response to the forwarded PREPARE from sendData`)
 
     // Update balance to reflect that we owe them the amount of the FULFILL
-    // Balance update will attempt settlement
     let amount = new BigNumber(preparePacket.data.amount)
     this.subBalance(amount)
+    this.account.payoutAmount = this.account.payoutAmount.plus(amount)
 
-    return this.attemptSettle()
+    this.outgoingSettlements.runExclusive(() => this.attemptSettle())
   }
 
-  // FIXME abstract into some kind of "claim if profitable" method? Could be called on client disconnect
-  // add othere comments
-  // make sure to run this on connect
+  private async startChannelWatcher () {
+    const interval = 10 * 60 * 1000 // Every 10 minutes
+    const timer = setInterval(async () => {
+      const claim = this.account.bestIncomingClaim
+      if (!claim) return
 
-  // startWatcher () {
-  //   const interval = 30 * 60 * 1000 // Every 30 minutes
-  //   const timer = setInterval(async () => {
-  //     const bestClaim = this.account.bestIncomingClaim
-  //     if (!bestClaim) {
-  //       return
-  //     }
+      const channel = await fetchChannel(this.master._web3, claim.channelId)
+        .catch(err => {
+          this.master._log.trace(err.message)
+        })
 
-  //     const channel = await Minomy.getChannel(this.master._web3, bestClaim.channelId)
+      if (channel && isSettling(channel)) {
+        this.claimIfProfitable()
+      }
+    }, interval)
+    // Check if we're in a Node.js environment
+    if (typeof timer.unref === 'function') {
+      // Don't let timer prevent process from exiting
+      timer.unref()
+    }
+    this.watcher = timer
+  }
 
-  //     if (channel && Minomy.isSettling(channel)) {
-  //       const tx = await Minomy.closeChannel(this.master._web3, bestClaim)
+  private async claimIfProfitable (): Promise<void> {
+    try {
+      const claim = this.account.bestIncomingClaim
+      if (!claim) return
 
-  //       const txFee = new BigNumber(tx.gasPrice).times(tx.gas)
-  //       if (new BigNumber(bestClaim.value).gt(txFee)) {
-  //         const receipt = await this.master._web3.eth.sendTransaction(tx)
+      const channel = await fetchChannel(this.master._web3, claim.channelId)
+      if (!channel) {
+        return this.master._log.trace(`Cannot claim channel ${claim.channelId} with ${this.account.accountName}: linked channel doesn't exist or is settled`)
+      }
 
-  //         // FIXME subtract the tx fee from they're balance? Or does it already take that into account?
+      this.master._log.trace(`Attempting to claim channel ${claim.channelId} for ${format(claim.value, Unit.Wei)}`)
 
-  //         if (!receipt.status) {
-  //           this.master._log.error(`FIXME`)
-  //         } else {
-  //           this.master._log.info(`FIXME`)
-  //         }
-  //       }
-  //     }
-  //   }, interval)
-  //   timer.unref() // Don't let the timer prevent the process from exiting
-  //   this.watcher = timer // FIXME add this
-  // }
+      const contract = await getContract(this.master._web3)
+      const txObj = contract.methods.claim(claim.channelId, claim.value, claim.signature)
+      const tx = await generateTx({
+        txObj,
+        from: channel.receiver,
+        web3: this.master._web3
+      })
 
-  // FIXME IMPORTANT -- channel watcher should loop through all linked channels (e.g. in master, not only individual connected accounts!!!)
+      const txFee = new BigNumber(tx.gasPrice).times(tx.gas)
+      // Check to verify it's profitable first
+      // This fee should already be accounted for in balance as apart of the initiation fee
+      if (txFee.gte(claim.value)) {
+        return this.master._log.trace(`Not profitable to claim incoming settling channel ${claim.channelId} with ${this.account.accountName}: ` +
+          `fee of ${format(txFee, Unit.Wei)} is greater than value of ${format(claim.value, Unit.Wei)}`)
+      }
 
-  // private _startWatcher () {
-  //   const interval = 10 * 60 * 1000 // Every 10 minutes
+      const receipt = await this.master._web3.eth.sendTransaction(tx)
 
-  //   const timer = setInterval(async () => {
-  //     // If sender starts settling and we don't claim the channel before the settling period ends,
-  //     // all our money goes back to them! (bad)
-  //     this._log.trace('Running channel watcher, checking for settling channels')
+      if (!receipt.status) {
+        this.master._log.trace(`Failed to claim channel ${claim.channelId}: transaction reverted by EVM`)
+      } else {
+        this.master._log.trace(`Successfully claimed channel ${claim.channelId} for account ${this.account.accountName}`)
+      }
+    } catch (err) {
+      this.master._log.error(`Failed to claim channel: ${err.message}`)
+    }
+  }
 
-  //     // Block and claim any accounts that start settling
-  //     for (let [channelId, accountName] of this._channels) {
-  //       const account = this._accounts.get(accountName)
-
-  //       if (!account) {
-  //         this._log.error(`Internal database error: account ${accountName} linked to channel ${channelId} doesn't exist`)
-  //         continue
-  //       }
-
-  //       await this._maybeClaim(channelId, account)
-  //     }
-
-  //     await this._persistChannels()
-  //   }, interval)
-  //   timer.unref() // Don't let timer prevent process from exiting
-  //   this._watcher = timer
-  // }
-
-  // // Claim if the given channel <-> account pair is settling (if it's profitable)
-  // private async _maybeClaim (channelId: string, account: Account) {
-  //   const channel = await Minomy.getChannel(this._web3, channelId)
-
-  //   // If the channel was claimed or settled, remove it from the db
-  //   if (!channel) {
-  //     this._channels.delete(channelId)
-  //   // Check if the channel is settling
-  //   } else if (Minomy.isSettling(channel)) {
-  //     account.isBlocked = true
-  //     this._log.info(`Blocked account ${account.accountName} for attempting to clear funds from channel ${channel.channelId}`)
-
-  //     // Claim the channel, if it's profitable
-  //     const claim = account.bestIncomingClaim
-  //     if (claim && channel.receiver === this._address) {
-  //       const tx = await Minomy.closeChannel(this._web3, { channelId, claim })
-
-  //       const txFee = new BigNumber(tx.gasPrice).times(tx.gas)
-
-  //       const isProfitable = new BigNumber(claim.value).gt(txFee)
-  //       if (!isProfitable) {
-  //         return this._log.trace(`Not profitable to claim channel ${channel.channelId}; will retry at the next interval`)
-  //       }
-
-  //       const receipt = await this._web3.eth.sendTransaction(tx)
-
-  //       if (!receipt.status) {
-  //         return this._log.error(`Failed to close settling channel ${channel.channelId}: EVM reverted transaction; will retry at the next interval`)
-  //       }
-
-  //       // The channel will be removed from the db at the next watch interval
-  //       this._log.info(`Successfully claimed channel ${channel.channelId} to prevent funds reverting to sender`)
-  //     }
-  //   }
-  // }
-
-  // private async _persistChannels () {
-  //   await this._store.set('channels', JSON.stringify([...this._channels]))
-  // }
-
-  // FIXME what should happen here?
   async disconnect (): Promise<void> {
-    // try {
-    //   // FIXME add naive claim on disconnect
-    //   const claim = this.account.bestIncomingClaim
-    //   if (claim) {
-    //     const channelId = claim.channelId
-    //     this.master._log.trace(`Attempting to claim channel ${channelId} for ${format(claim.value, Unit.Wei)}`)
+    clearInterval(this.watcher)
 
-    //     const tx = await Minomy.closeChannel(this.master._web3, { channelId, claim })
+    // Finish processing all incoming settlements before claiming & disconnecting
+    await Promise.all([
+      this.incomingSettlements.runExclusive(() => Promise.resolve()),
+      this.outgoingSettlements.runExclusive(() => Promise.resolve())
+    ])
 
-    //     const receipt = await this.master._web3.eth.sendTransaction(tx)
+    if (this.master._claimOnDisconnect) {
+      await this.claimIfProfitable()
+    }
 
-    //     if (!receipt.status) {
-    //       this.master._log.trace(`Failed to claim channel ${channelId}: transaction reverted by EVM`)
-    //     } else {
-    //       this.master._log.trace(`Successfully claimed channel ${channelId} for account ${this.account.accountName}`)
-    //     }
-    //   }
-    // } catch (err) {
-    //   this.master._log.error(`Failed to claim channel: ${err.message}`)
-    // }
-
-    // clearInterval(this._watcher)
-
-    // await this._persistChannels()
-
-    // for (const accountName of this._accounts.keys()) {
-      // this._store.unload(accountName)
-    // }
-    // await this._store.close()
+    // Remove account from store cache
+    return this.master._store.unload(`${this.account.accountName}:account`)
   }
 }
