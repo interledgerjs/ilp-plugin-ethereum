@@ -15,7 +15,7 @@ import createLogger = require('ilp-logger')
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 
 interface EthereumPluginOpts {
-  role: 'client' | 'server'
+  role: 'client' | 'peer' | 'server'
   // Ethereum address of this account to tell peers to pay this at
   ethereumAddress: string
   // Web3 1.0 instance with a default wallet account for signing transactions and messages
