@@ -66,7 +66,7 @@ export default class EthereumAccount {
   // Queue to handle all incoming settlements/BTP transfers
   private incomingSettlements = new Mutex()
   // Queue to handle all outgoing settlements
-  // If one settlement is occuring, only a single one can be queued
+  // If one settlement is occuring, only a single settlement can be queued
   private outgoingSettlements = new Mutex(1)
   // Timer/interval for channel watcher to claim incoming, settling channels
   private watcher: NodeJS.Timer
@@ -101,11 +101,11 @@ export default class EthereumAccount {
     const newBalance = this.account.balance.plus(amount)
 
     if (newBalance.gt(maximum)) {
-      throw new Error(`Cannot debit ${format(amount, Unit.Gwei)} from account ${this.account.accountName}, ` +
+      throw new Error(`Cannot debit ${format(amount, Unit.Gwei)} from ${this.account.accountName}, ` +
         `proposed balance of ${format(newBalance, Unit.Gwei)} exceeds maximum of ${format(maximum, Unit.Gwei)}`)
     }
 
-    this.master._log.trace(`Debited ${format(amount, Unit.Gwei)} from account ${this.account.accountName}, new balance is ${format(newBalance, Unit.Gwei)}`)
+    this.master._log.trace(`Debited ${format(amount, Unit.Gwei)} from ${this.account.accountName}, new balance is ${format(newBalance, Unit.Gwei)}`)
     this.account.balance = newBalance
   }
 
@@ -120,7 +120,7 @@ export default class EthereumAccount {
         `proposed balance of ${format(newBalance, Unit.Gwei)} is below minimum of ${format(minimum, Unit.Gwei)}`)
     }
 
-    this.master._log.trace(`Credited ${format(amount, Unit.Gwei)} to account ${this.account.accountName}, new balance is ${format(newBalance, Unit.Gwei)}`)
+    this.master._log.trace(`Credited ${format(amount, Unit.Gwei)} to ${this.account.accountName}, new balance is ${format(newBalance, Unit.Gwei)}`)
     this.account.balance = newBalance
   }
 
@@ -196,6 +196,10 @@ export default class EthereumAccount {
     try {
       const { ethereumAddress } = JSON.parse(info.data.toString())
 
+      if (typeof ethereumAddress !== 'string') {
+        return this.master._log.trace(`Failed to link Ethereum address: invalid response, no address provided`)
+      }
+
       if (!Web3.utils.isAddress(ethereumAddress)) {
         return this.master._log.trace(`Failed to link Ethereum address: ${ethereumAddress} is not a valid address`)
       }
@@ -205,12 +209,12 @@ export default class EthereumAccount {
         // Don't log if it's the same address that's already linked...we don't care
         if (currentAddress.toLowerCase() === ethereumAddress.toLowerCase()) return
 
-        return this.master._log.trace(`Cannot link Ethereum address ${ethereumAddress} to account ${this.account.accountName}: ` +
+        return this.master._log.trace(`Cannot link Ethereum address ${ethereumAddress} to ${this.account.accountName}: ` +
           `${currentAddress} is already linked for the lifetime of the account`)
       }
 
       this.account.ethereumAddress = ethereumAddress
-      this.master._log.trace(`Successfully linked Ethereum address ${ethereumAddress} to account ${this.account.accountName}`)
+      this.master._log.trace(`Successfully linked Ethereum address ${ethereumAddress} to ${this.account.accountName}`)
     } catch (err) {
       this.master._log.trace(`Failed to link Ethereum address: ${err.message}`)
     }
@@ -245,15 +249,24 @@ export default class EthereumAccount {
 
       const shouldSettle = settleThreshold.gt(this.account.balance)
       if (!shouldSettle) {
-        return this.master._log.trace(`Cannot settle: balance of ${format(this.account.balance, Unit.Gwei)} is not below settle threshold of ${format(settleThreshold, Unit.Gwei)}`)
+        return this.master._log.trace(`Cannot settle: balance of ${format(this.account.balance, Unit.Gwei)} ` +
+          `is not below settle threshold of ${format(settleThreshold, Unit.Gwei)}`)
       }
 
-      let settlementBudget = BigNumber.min(
-        this.master._balance.settleTo.minus(this.account.balance),
-        // If we're not prefunding, the amount should be limited by the total packets we've fulfilled
-        // If we're prefunding, the payoutAmount is infinity, so it doesn't affect the amount to settle
-        this.account.payoutAmount
-      )
+      let settlementBudget = this.master._balance.settleTo.minus(this.account.balance)
+      if (settlementBudget.lte(0)) {
+        // This *should* never happen, since the master constructor verifies that settleTo >= settleThreshold
+        return this.master._log.error(`Critical settlement error: settlement threshold triggered, but settle amount of ` +
+          `${format(settlementBudget, Unit.Gwei)} is 0 or negative`)
+      }
+
+      // If we're not prefunding, the amount should be limited by the total packets we've fulfilled
+      // If we're prefunding, the payoutAmount is infinity, so it doesn't affect the amount to settle
+      settlementBudget = BigNumber.min(settlementBudget, this.account.payoutAmount)
+      if (settlementBudget.lte(0)) {
+        return this.master._log.trace(`Cannot settle: no fulfilled packets have yet to be settled, ` +
+          `payout amount is ${format(this.account.payoutAmount, Unit.Gwei)}`)
+      }
 
       // This should never error, since settleTo < maximum
       this.addBalance(settlementBudget)
@@ -265,7 +278,6 @@ export default class EthereumAccount {
 
       try {
         // 1) Try to send a claim: spend the channel down entirely before funding it
-        if (settlementBudget.lte(0)) throw settlementBudget
         amountLeftover = await this.sendClaim(settlementBudget)
         // 2) Open or deposit to a channel if it's necessary to send anything leftover
         if (amountLeftover.lte(0)) throw amountLeftover
@@ -530,6 +542,7 @@ export default class EthereumAccount {
         try {
           this.addBalance(amountBN)
         } catch (err) {
+          this.master._log.trace(`Failed to forward PREPARE: ${err.message}`)
           throw new IlpPacket.Errors.InsufficientLiquidityError(err.message)
         }
 
@@ -699,10 +712,15 @@ export default class EthereumAccount {
 
     // Update balance to reflect that we owe them the amount of the FULFILL
     let amount = new BigNumber(preparePacket.data.amount)
-    this.subBalance(amount)
-    this.account.payoutAmount = this.account.payoutAmount.plus(amount)
+    try {
+      this.subBalance(amount)
+      this.account.payoutAmount = this.account.payoutAmount.plus(amount)
 
-    this.outgoingSettlements.runExclusive(() => this.attemptSettle())
+      this.outgoingSettlements.runExclusive(() => this.attemptSettle())
+    } catch (err) {
+      this.master._log.trace(`Failed to fulfill response to PREPARE: ${err.message}`)
+      throw new IlpPacket.Errors.InsufficientLiquidityError(err.message)
+    }
   }
 
   private async startChannelWatcher () {
