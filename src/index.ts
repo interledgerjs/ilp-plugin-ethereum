@@ -140,16 +140,15 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
     }
 
     // Validate balance configuration: max >= settleTo > settleThreshold >= min
-    // TODO how this is setup may affect the payoutAmount thing
     if (this._balance.settleThreshold) {
       if (!this._balance.maximum.gte(this._balance.settleTo)) {
         throw new Error('Invalid balance configuration: maximum balance must be greater than or equal to settleTo')
       }
-      if (!this._balance.settleTo.gt(this._balance.settleThreshold)) {
-        throw new Error('Invalid balance configuration: settleTo must be greater than settleThreshold')
+      if (!this._balance.settleTo.gte(this._balance.settleThreshold)) {
+        throw new Error('Invalid balance configuration: settleTo must be greater than or equal to settleThreshold')
       }
       if (!this._balance.settleThreshold.gte(this._balance.minimum)) {
-        throw new Error('Invalid balance configuration: settleThreshold must be greater than minimum balance')
+        throw new Error('Invalid balance configuration: settleThreshold must be greater than or equal to minimum balance')
       }
     } else {
       if (!this._balance.maximum.gt(this._balance.minimum)) {
