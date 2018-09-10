@@ -18,13 +18,14 @@
   "dependencies": {
     "@machinomy/contracts": "4.1.1",
     "@types/web3": "^1.0.3",
+    "axios": "^0.18.0",
     "bignumber.js": "^7.2.1",
     "btp-packet": "^1.2.1",
     "ganache-cli": "^6.1.2",
     "ilp-logger": "^1.0.2",
     "ilp-packet": "^3.0.0",
-    "ilp-plugin-btp": "github:kincaidoneil/ilp-plugin-btp",
-    "ilp-plugin-mini-accounts": "github:kincaidoneil/ilp-plugin-mini-accounts",
+    "ilp-plugin-btp": "github:interledgerjs/ilp-plugin-btp#ko-ts-fixes",
+    "ilp-plugin-mini-accounts": "github:interledgerjs/ilp-plugin-mini-accounts#ko-ts-fixes",
     "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#ko-receive-only",
     "web3": "^1.0.0-beta.36"
   },
