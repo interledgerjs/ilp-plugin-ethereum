@@ -322,6 +322,7 @@ export default class EthereumAccount {
       if (typeof this.account.outgoingChannelId === 'string') {
         // Update channel details and fetch latest state
         channel = await fetchChannel(this.master._web3, this.account.outgoingChannelId)
+        console.log(channel)
         if (!channel) {
           // Channel doesn't exist (or is settled), so attempt to create a new one
           requiresNewChannel = true
