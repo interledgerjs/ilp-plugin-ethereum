@@ -314,7 +314,6 @@ export default class EthereumAccount {
   }
 
   private async fundOutgoingChannel (settlementBudget: BigNumber): Promise<BigNumber> {
-    console.log(this.master._web3.eth)
     try {
       // Determine if an on-chain funding transaction needs to occur
       let requiresNewChannel = false
