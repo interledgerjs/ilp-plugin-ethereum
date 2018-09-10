@@ -15,36 +15,34 @@ import createLogger = require('ilp-logger')
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 
 interface EthereumPluginOpts {
-  role: 'client' | 'peer' | 'server'
-  // Ethereum address of this account to tell peers to pay this at
-  ethereumAddress: string
-  // Web3 1.0 instance with a default wallet account for signing transactions and messages
-  web3: Web3
+  role: 'client' | 'server'
+  // Private key of the Ethereum account used to send and receive
+  // Corresponds to the address shared with peers
+  ethereumPrivateKey: string
+  // Provider to connect to a given Ethereum node
+  // https://web3js.readthedocs.io/en/1.0/web3.html#providers
+  ethereumProvider?: string
   // Should the plugin immediately attempt to settle with its peer on connect?
   // - Default for clients is `true`; default for servers and direct peers is `false`
   settleOnConnect?: boolean
   // Should incoming channels to all accounts on the plugin be claimed whenever disconnect is called on the plugin?
   // - Default for clients is `true`; default for servers and direct peers is `false`
   claimOnDisconnect?: boolean
-  // Default amount to fund when opening a new channel or depositing to a depleted channel
-  // * gwei
+  // Default amount to fund when opening a new channel or depositing to a depleted channel (gwei)
   outgoingChannelAmount?: BigNumber.Value
   // Fee collected whenever a new channel is first linked to an account
-  // This may be necessary to cover the peer's tx fee to claim from a channel
-  // * gwei
+  // This may be necessary to cover the peer's tx fee to claim from a channel (gwei)
   incomingChannelFee?: BigNumber.Value
   // Minimum number of blocks for settlement period to accept a new incoming channel
   minIncomingSettlementPeriod?: BigNumber.Value
   // Number of blocks for settlement period used to create outgoing channels
   outgoingSettlementPeriod?: BigNumber.Value
-  // Maximum allowed amount in gwei for incoming packets
-  // * gwei
+  // Maximum allowed amount in gwei for incoming packets (gwei)
   maxPacketAmount?: BigNumber.Value
   // Balance (positive) is amount in gwei the counterparty owes this instance
   // (negative balance implies this instance owes the counterparty)
   // Debits add to the balance; credits subtract from the balance
-  // maximum >= settleTo > settleThreshold >= minimum
-  // * gwei
+  // maximum >= settleTo > settleThreshold >= minimum (gwei)
   balance?: {
     // Maximum balance counterparty owes this instance before further balance additions are rejected
     // e.g. settlements and forwarding of PREPARE packets with debits that increase balance above maximum would be rejected
@@ -65,7 +63,7 @@ interface EthereumPluginOpts {
 
 class EthereumPlugin extends EventEmitter2 implements PluginInstance {
   static readonly version = 2
-  private readonly _role: 'client' | 'peer' | 'server'
+  private readonly _role: 'client' | 'server'
   private readonly _plugin: EthereumClientPlugin | EthereumServerPlugin
   // Public so they're accessible to internal account class
   readonly _ethereumAddress: string
@@ -88,6 +86,13 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
 
   constructor (opts: EthereumPluginOpts) {
     super()
+
+    if (typeof opts.ethereumPrivateKey !== 'string') {
+      throw new Error('Ethereum private key is required')
+    }
+
+    this._web3 = new Web3(opts.ethereumProvider || 'wss://mainnet.infura.io/ws')
+    this._ethereumAddress = this._web3.eth.accounts.wallet.add(opts.ethereumPrivateKey).address
 
     this._role = opts.role || 'client'
 
@@ -157,9 +162,6 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
 
       this._log.trace(`Auto-settlement disabled: plugin is in receive-only mode since no settleThreshold was configured`)
     }
-
-    this._ethereumAddress = opts.ethereumAddress
-    this._web3 = opts.web3
 
     const InternalPlugin = this._role === 'server' ? EthereumServerPlugin : EthereumClientPlugin
     this._plugin = new InternalPlugin({
