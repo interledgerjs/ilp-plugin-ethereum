@@ -92,7 +92,7 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
     }
 
     this._web3 = new Web3(opts.ethereumProvider || 'wss://mainnet.infura.io/ws')
-    this._ethereumAddress = this._web3.eth.accounts.wallet.add(opts.ethereumPrivateKey).address
+    this._ethereumAddress = this._web3.eth.accounts.wallet.add('0x' + opts.ethereumPrivateKey).address
 
     this._role = opts.role || 'client'
 
