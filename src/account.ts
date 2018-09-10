@@ -322,7 +322,6 @@ export default class EthereumAccount {
       if (typeof this.account.outgoingChannelId === 'string') {
         // Update channel details and fetch latest state
         channel = await fetchChannel(this.master._web3, this.account.outgoingChannelId)
-        console.log(channel)
         if (!channel) {
           // Channel doesn't exist (or is settled), so attempt to create a new one
           requiresNewChannel = true
@@ -354,7 +353,7 @@ export default class EthereumAccount {
 
         const contract = await getContract(this.master._web3)
         const channelId = await generateChannelId()
-        const txObj = contract.methods.open(channelId, this.account.ethereumAddress, this.master._outgoingSettlementPeriod)
+        const txObj = contract.methods.open(channelId, this.account.ethereumAddress, this.master._outgoingSettlementPeriod.toNumber())
         const tx = await generateTx({
           web3: this.master._web3,
           from: this.master._ethereumAddress,
