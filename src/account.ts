@@ -353,7 +353,7 @@ export default class EthereumAccount {
 
         const contract = await getContract(this.master._web3)
         const channelId = await generateChannelId()
-        const txObj = contract.methods.open(channelId, this.account.ethereumAddress, this.master._outgoingSettlementPeriod)
+        const txObj = contract.methods.open(channelId, this.account.ethereumAddress, this.master._outgoingSettlementPeriod.toNumber())
         const tx = await generateTx({
           web3: this.master._web3,
           from: this.master._ethereumAddress,

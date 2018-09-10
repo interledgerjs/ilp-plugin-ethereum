@@ -20,19 +20,19 @@
     "@types/web3": "^1.0.3",
     "bignumber.js": "^7.2.1",
     "btp-packet": "^1.2.1",
-    "ganache-cli": "^6.1.2",
+    "ganache-cli": "^6.1.8",
     "ilp-logger": "^1.0.2",
     "ilp-packet": "^3.0.0",
     "ilp-plugin-btp": "github:kincaidoneil/ilp-plugin-btp",
-    "ilp-plugin-mini-accounts": "github:kincaidoneil/ilp-plugin-mini-accounts",
+    "ilp-plugin-mini-accounts": "github:strata-labs/ilp-plugin-mini-accounts",
     "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#ko-receive-only",
     "web3": "^1.0.0-beta.36"
   },
   "devDependencies": {
-    "@types/jest": "^23.3.1",
+    "@types/jest": "^23.3.2",
     "@types/request": "^2.47.1",
     "babel-preset-env": "^1.7.0",
-    "eslint": "^5.3.0",
+    "eslint": "^5.5.0",
     "eslint-config-standard": "^11.0.0",
     "eslint-plugin-import": "^2.14.0",
     "eslint-plugin-node": "^7.0.1",
@@ -40,12 +40,12 @@
     "eslint-plugin-standard": "^3.1.0",
     "get-port": "^4.0.0",
     "jest": "^23.4.2",
-    "source-map-support": "^0.5.6",
+    "source-map-support": "^0.5.9",
     "standard": "^11.0.1",
     "ts-jest": "^23.1.4",
     "tslint": "^5.11.0",
     "tslint-config-standard": "^7.1.0",
-    "typescript": "^3.0.1"
+    "typescript": "^3.0.3"
   },
   "jest": {
     "globals": {

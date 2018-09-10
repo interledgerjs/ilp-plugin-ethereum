@@ -17,9 +17,7 @@ BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notat
 interface EthereumPluginOpts {
   role: 'client' | 'peer' | 'server'
   // Ethereum address of this account to tell peers to pay this at
-  ethereumAddress: string
-  // Web3 1.0 instance with a default wallet account for signing transactions and messages
-  web3: Web3
+  ethereumSecret: string
   // Should the plugin immediately attempt to settle with its peer on connect?
   // - Default for clients is `true`; default for servers and direct peers is `false`
   settleOnConnect?: boolean
@@ -158,8 +156,14 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
       this._log.trace(`Auto-settlement disabled: plugin is in receive-only mode since no settleThreshold was configured`)
     }
 
-    this._ethereumAddress = opts.ethereumAddress
-    this._web3 = opts.web3
+    // double equal check for null & undefined 
+    if (opts.ethereumSecret == null) {
+      throw new Error('No ethereumSecret specified')  
+    }
+    this._web3 = new Web3('wss://mainnet.infura.io/ws') 
+    this._web3.eth.accounts.wallet.add(opts.ethereumSecret)
+
+    this._ethereumAddress = this._web3.eth.accounts.wallet[0].address 
 
     const InternalPlugin = this._role === 'server' ? EthereumServerPlugin : EthereumClientPlugin
     this._plugin = new InternalPlugin({
