@@ -66,7 +66,6 @@ export const generateChannelId = async () =>
   '0x' + (await promisify(randomBytes)(32)).toString('hex')
 
 export const getContractAddress = async (web3: Web3): Promise<string> => {
-  console.log(web3.eth)
   const chainId = await web3.eth.net.getId()
   const network = Unidirectional.networks[chainId]
 
