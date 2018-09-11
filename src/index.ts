@@ -7,6 +7,7 @@ import BtpPlugin, { BtpPacket, BtpSubProtocol } from 'ilp-plugin-btp'
 import MiniAccountsPlugin from 'ilp-plugin-mini-accounts'
 import EthereumAccount, { requestId, convert, Unit } from './account'
 import * as IlpPacket from 'ilp-packet'
+import * as ethUtil from 'ethereumjs-util'
 const BtpPacket = require('btp-packet')
 
 import * as debug from 'debug'
@@ -91,8 +92,16 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
       throw new Error('Ethereum private key is required')
     }
 
+    const privKey =
+      opts.ethereumPrivateKey.indexOf('0x') === 0
+        ? opts.ethereumPrivateKey
+        : '0x' + opts.ethereumPrivateKey
+    if (!ethUtil.isValidPrivate(ethUtil.toBuffer(privKey))) {
+      throw new Error('Invalid Ethereum private key')
+    }
+
     this._web3 = new Web3(opts.ethereumProvider || 'wss://mainnet.infura.io/ws')
-    this._ethereumAddress = this._web3.eth.accounts.wallet.add('0x' + opts.ethereumPrivateKey).address
+    this._ethereumAddress = this._web3.eth.accounts.wallet.add(privKey).address
 
     this._role = opts.role || 'client'
 
