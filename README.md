@@ -69,7 +69,7 @@ Contrary to other plugins that require the balance middleware in [ilp-connector]
 
 Thus, pre-funding—sending money to the peer *before* forwarding packets through them—requires a positive `settleTo` amount, and post-funding—settling *after* forwarding packets through them—requires a 0 or negative `settleTo` amount.
 
-In this model, it is the sender's responsibility to fund above the fee its peer charges to accept a new incoming channel (through setting `settleTo`), and it is the receiver's responsibility to fulfill packets above what its peer charges to open a new channel (through setting `maximum`). Furthermore, even when using the plugin as a client, the fee to fund an outgoing channel is debited (added) to the peer's balance.
+In this model, it is the sender's responsibility to fund above the fee its peer charges to accept a new incoming channel (up to `settleTo`), and it is the receiver's responsibility to fulfill packets above what its peer charges to open a new channel (up to `maximum`). Furthermore, even when using the plugin as a client, the fees to fund outgoing channels are debited (added) to the peer's balance, and must be accounted for in the `settleTo` amount.
 
 All the following balance options are in units of *gwei*.
 
