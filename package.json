@@ -1,7 +1,7 @@
 {
-  "name": "ilp-plugin-ethereum-asym-server",
+  "name": "ilp-plugin-ethereum",
   "version": "1.2.2",
-  "description": "Asymmetric Ethereum paychan server for ILP using Machinomy",
+  "description": "Settle Interledger payments with ether and ERC-20 tokens",
   "main": "build/index.js",
   "types": "build/index.d.ts",
   "scripts": {
@@ -14,20 +14,37 @@
     "test": "jest --detectOpenHandles",
     "test-watch": "jest --watch --detectOpenHandles --verbose false"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/interledgerjs/ilp-plugin-ethereum.git"
+  },
+  "keywords": [
+    "ilp",
+    "interledger",
+    "ledger",
+    "plugin",
+    "ethereum",
+    "machinomy",
+    "erc20"
+  ],
+  "author": "Interledger Team",
   "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/interledgerjs/ilp-plugin-ethereum/issues"
+  },
+  "homepage": "https://github.com/interledgerjs/ilp-plugin-ethereum#readme",
   "dependencies": {
     "@machinomy/contracts": "4.1.1",
     "@types/web3": "^1.0.3",
     "axios": "^0.18.0",
     "bignumber.js": "^7.2.1",
     "btp-packet": "^1.2.1",
-    "ganache-cli": "^6.1.2",
     "ilp-logger": "^1.0.2",
     "ilp-packet": "^3.0.0",
     "ilp-plugin-btp": "github:interledgerjs/ilp-plugin-btp#ko-ts-fixes",
     "ilp-plugin-mini-accounts": "github:interledgerjs/ilp-plugin-mini-accounts#ko-ts-fixes",
     "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#ko-receive-only",
-    "web3": "^1.0.0-beta.36"
+    "web3": "1.0.0-beta.36"
   },
   "devDependencies": {
     "@types/jest": "^23.3.1",
