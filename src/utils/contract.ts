@@ -4,8 +4,8 @@ import BigNumber from 'bignumber.js'
 import { randomBytes } from 'crypto'
 import { promisify } from 'util'
 
-import UNIDIRECTIONAL_MAINNET = require('../abi/Unidirectional-mainnet.json')
-import UNIDIRECTIONAL_TESTNET = require('../abi/Unidirectional-testnet.json')
+import * as UNIDIRECTIONAL_MAINNET from '../abi/Unidirectional-mainnet.json'
+import * as UNIDIRECTIONAL_TESTNET from '../abi/Unidirectional-testnet.json'
 
 const NETWORKS = {
   // Mainnet
