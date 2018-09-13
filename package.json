@@ -7,12 +7,10 @@
   "scripts": {
     "build": "tsc --project .",
     "build-watch": "tsc --watch --project .",
-    "lint": "npm run tslint && npm run eslint",
-    "tslint": "tslint --project .",
-    "eslint": "eslint test",
+    "lint": "tslint --project .",
     "postinstall": "npm run build",
     "test": "jest --detectOpenHandles",
-    "test-watch": "jest --watch --detectOpenHandles --verbose false"
+    "test-watch": "DEBUG=* jest --watch --detectOpenHandles --verbose false"
   },
   "repository": {
     "type": "git",
@@ -34,9 +32,8 @@
   },
   "homepage": "https://github.com/interledgerjs/ilp-plugin-ethereum#readme",
   "dependencies": {
-    "@machinomy/contracts": "4.1.1",
     "@types/ethereumjs-util": "^5.2.0",
-    "@types/web3": "^1.0.3",
+    "@types/web3": "^1.0.4",
     "axios": "^0.18.0",
     "bignumber.js": "^7.2.1",
     "btp-packet": "^1.2.1",
@@ -45,21 +42,16 @@
     "eventemitter2": "^5.0.1",
     "ilp-logger": "^1.0.2",
     "ilp-packet": "^3.0.0",
-    "ilp-plugin-btp": "github:interledgerjs/ilp-plugin-btp#ko-ts-fixes",
+    "ilp-plugin-btp": "^1.3.2",
     "ilp-plugin-mini-accounts": "github:interledgerjs/ilp-plugin-mini-accounts#ko-ts-fixes",
     "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#ko-receive-only",
     "web3": "1.0.0-beta.36"
   },
   "devDependencies": {
+    "@types/get-port": "^4.0.0",
     "@types/jest": "^23.3.1",
     "@types/request": "^2.47.1",
     "babel-preset-env": "^1.7.0",
-    "eslint": "^5.3.0",
-    "eslint-config-standard": "^11.0.0",
-    "eslint-plugin-import": "^2.14.0",
-    "eslint-plugin-node": "^7.0.1",
-    "eslint-plugin-promise": "^3.8.0",
-    "eslint-plugin-standard": "^3.1.0",
     "get-port": "^4.0.0",
     "jest": "^23.4.2",
     "source-map-support": "^0.5.6",
@@ -70,27 +62,10 @@
     "typescript": "^3.0.1"
   },
   "jest": {
-    "globals": {
-      "ts-jest": {
-        "useBabelrc": true
-      }
-    },
     "testEnvironment": "node",
     "transform": {
-      "^.+\\.tsx?$": "ts-jest",
-      "^.+\\.js$": "babel-jest"
+      ".ts": "ts-jest"
     },
-    "transformIgnorePatterns": [
-      "node_modules/(?!(ilp-plugin-btp|ilp-plugin-mini-accounts))"
-    ],
-    "testRegex": "(/__tests__/.*|(\\.|/)(test|spec))\\.(jsx?|tsx?)$",
-    "moduleFileExtensions": [
-      "ts",
-      "tsx",
-      "js",
-      "jsx",
-      "json",
-      "node"
-    ]
+    "testRegex": "__tests__"
   }
 }

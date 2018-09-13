@@ -12,7 +12,8 @@
     "inlineSources": true,
     "strictNullChecks": true,
     "suppressImplicitAnyIndexErrors": true,
-    "alwaysStrict": true
+    "alwaysStrict": true,
+    "resolveJsonModule": true
   },
   "compileOnSave": true
 }
