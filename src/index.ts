@@ -11,7 +11,7 @@ import * as ethUtil from 'ethereumjs-util'
 const BtpPacket = require('btp-packet')
 
 import * as debug from 'debug'
-import createLogger = require('ilp-logger')
+import createLogger from 'ilp-logger'
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 
