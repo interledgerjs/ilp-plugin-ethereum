@@ -12,8 +12,8 @@ import {
   Claim,
   Channel,
   fetchChannel,
+  getNetwork,
   getContract,
-  getContractAddress,
   generateChannelId,
   generateTx,
   isSettling
@@ -618,7 +618,7 @@ export default class EthereumAccount {
 
         // Even if the sender started settling, still accept the claim: we don't mind if they send us more money!
 
-        const contractAddress = await getContractAddress(this.master._web3)
+        const contractAddress = (await getNetwork(this.master._web3)).unidirectional.address
         // @ts-ignore http://web3js.readthedocs.io/en/1.0/web3-utils.html#soliditysha3
         const paymentDigest = Web3.utils.soliditySha3(contractAddress, claim.channelId, claim.value)
         const senderAddress = this.master._web3.eth.accounts.recover(paymentDigest, claim.signature)
