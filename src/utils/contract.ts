@@ -41,7 +41,7 @@ const NETWORKS = {
 export interface Network {
   unidirectional: {
     address: string
-    abi: typeof UNIDIRECTIONAL_MAINNET | typeof UNIDIRECTIONAL_TESTNET
+    abi: any 
   }
 }
 
