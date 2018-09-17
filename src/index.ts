@@ -44,7 +44,7 @@ interface EthereumPluginOpts {
   // (negative balance implies this instance owes the counterparty)
   // Debits add to the balance; credits subtract from the balance
   // maximum >= settleTo > settleThreshold >= minimum (gwei)
-  balance?: {
+  balance: {
     // Maximum balance counterparty owes this instance before further balance additions are rejected
     // e.g. settlements and forwarding of PREPARE packets with debits that increase balance above maximum would be rejected
     maximum?: BigNumber.Value
@@ -61,6 +61,11 @@ interface EthereumPluginOpts {
   _store?: any // resolves incompatiblities with the older ilp-store-wrapper used by mini-accounts
   _log?: Logger
 }
+
+const OUTGOING_CHANNEL_AMOUNT = convert('0.04', Unit.Eth, Unit.Gwei)
+
+const INCOMING_SETTLEMENT_PERIOD = 3 * 24 * 60 * 60 / 15 // ~3 days, assuming 15 second block times
+const OUTGOING_SETTLEMENT_PERIOD = 2 * INCOMING_SETTLEMENT_PERIOD
 
 class EthereumPlugin extends EventEmitter2 implements PluginInstance {
   static readonly version = 2
@@ -85,75 +90,87 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
   readonly _store: any // Resolves incompatiblities with the older ilp-store-wrapper used by mini-accounts
   readonly _log: Logger
 
-  constructor (opts: EthereumPluginOpts) {
+  constructor ({
+    role = 'client',
+    ethereumPrivateKey,
+    ethereumProvider,
+    settleOnConnect = role === 'client',
+    claimOnDisconnect = role === 'client',
+    incomingChannelFee = 0,
+    outgoingChannelAmount = OUTGOING_CHANNEL_AMOUNT,
+    minIncomingSettlementPeriod = INCOMING_SETTLEMENT_PERIOD,
+    outgoingSettlementPeriod = OUTGOING_SETTLEMENT_PERIOD,
+    maxPacketAmount = Infinity,
+    balance: {
+      maximum = Infinity,
+      settleTo = 0,
+      settleThreshold,
+      minimum = -Infinity
+    },
+    // Ethereum specific params are not passed to mini-accounts/plugin-btp
+    ...opts
+  }: EthereumPluginOpts) {
     super()
 
-    if (typeof opts.ethereumPrivateKey !== 'string') {
+    if (typeof ethereumPrivateKey !== 'string') {
       throw new Error('Ethereum private key is required')
     }
 
-    const privKey =
-      opts.ethereumPrivateKey.indexOf('0x') === 0
-        ? opts.ethereumPrivateKey
-        : '0x' + opts.ethereumPrivateKey
-    if (!ethUtil.isValidPrivate(ethUtil.toBuffer(privKey))) {
+    // Web3 requires a 0x in front; prepend it if it's missing
+    if (ethereumPrivateKey.indexOf('0x') !== 0) {
+      ethereumPrivateKey = '0x' + ethereumPrivateKey
+    }
+
+    if (!ethUtil.isValidPrivate(ethUtil.toBuffer(ethereumPrivateKey))) {
       throw new Error('Invalid Ethereum private key')
     }
 
-    this._web3 = new Web3(opts.ethereumProvider || 'wss://mainnet.infura.io/ws')
-    this._ethereumAddress = this._web3.eth.accounts.wallet.add(privKey).address
+    this._web3 = new Web3(ethereumProvider || 'wss://mainnet.infura.io/ws')
+    this._ethereumAddress = this._web3.eth.accounts.wallet.add(ethereumPrivateKey).address
 
-    this._role = opts.role || 'client'
+    this._role = role
 
     this._store = new StoreWrapper(opts._store)
 
-    this._log = opts._log || createLogger(`ilp-plugin-ethereum-${this._role}`)
-    this._log.trace = this._log.trace || debug(`ilp-plugin-ethereum-${this._role}:trace`)
+    this._log = opts._log || createLogger(`ilp-plugin-ethereum-${role}`)
+    this._log.trace = this._log.trace || debug(`ilp-plugin-ethereum-${role}:trace`)
 
     // On settle initially and claim on disconnect (by default) if the plugin is a client
-    this._settleOnConnect = opts.settleOnConnect || this._role === 'client'
-    this._claimOnDisconnect = opts.claimOnDisconnect || this._role === 'client'
+    this._settleOnConnect = settleOnConnect
+    this._claimOnDisconnect = claimOnDisconnect
 
-    this._outgoingChannelAmount =
-      opts.outgoingChannelAmount
-        ? convert(opts.outgoingChannelAmount, Unit.Gwei, Unit.Wei)
-        : convert('0.04', Unit.Eth, Unit.Wei)
+    this._outgoingChannelAmount = convert(outgoingChannelAmount, Unit.Gwei, Unit.Wei)
       .abs().dp(0, BigNumber.ROUND_DOWN)
 
-    this._incomingChannelFee =
-      opts.incomingChannelFee
-        ? convert(opts.incomingChannelFee, Unit.Gwei, Unit.Wei)
-        : new BigNumber(0)
+    this._incomingChannelFee = convert(incomingChannelFee, Unit.Gwei, Unit.Wei)
       .abs().dp(0, BigNumber.ROUND_DOWN)
 
     // Sender can start a settling period at anytime (e.g., if receiver is unresponsive)
     // If the receiver doesn't claim funds within that period, sender gets entire channel value
 
-    const INCOMING_SETTLEMENT_PERIOD = 7 * 24 * 60 * 60 / 15 // ~1 week, asuming, 15 sec block times
-    this._minIncomingSettlementPeriod = new BigNumber(opts.minIncomingSettlementPeriod || INCOMING_SETTLEMENT_PERIOD)
+    this._minIncomingSettlementPeriod = new BigNumber(minIncomingSettlementPeriod)
       .abs().dp(0, BigNumber.ROUND_CEIL)
 
-    const OUTGOING_SETTLEMENT_PERIOD = 1.25 * INCOMING_SETTLEMENT_PERIOD
-    this._outgoingSettlementPeriod = new BigNumber(opts.outgoingSettlementPeriod || OUTGOING_SETTLEMENT_PERIOD)
+    this._outgoingSettlementPeriod = new BigNumber(outgoingSettlementPeriod)
       .abs().dp(0, BigNumber.ROUND_DOWN)
 
-    this._maxPacketAmount = new BigNumber(opts.maxPacketAmount || Infinity)
+    this._maxPacketAmount = new BigNumber(maxPacketAmount)
       .abs().dp(0, BigNumber.ROUND_DOWN)
 
     this._balance = {
-      maximum: new BigNumber((opts.balance && opts.balance.maximum) || Infinity)
+      maximum: new BigNumber(maximum)
         .dp(0, BigNumber.ROUND_FLOOR),
-      settleTo: new BigNumber((opts.balance && opts.balance.settleTo) || 0)
+      settleTo: new BigNumber(settleTo)
         .dp(0, BigNumber.ROUND_FLOOR),
-      settleThreshold: opts.balance && opts.balance.settleThreshold
-        ? new BigNumber(opts.balance.settleThreshold)
-            .dp(0, BigNumber.ROUND_FLOOR)
+      settleThreshold: settleThreshold
+        ? new BigNumber(settleThreshold)
+          .dp(0, BigNumber.ROUND_FLOOR)
         : undefined,
-      minimum: new BigNumber((opts.balance && opts.balance.minimum) || -Infinity)
+      minimum: new BigNumber(minimum)
         .dp(0, BigNumber.ROUND_CEIL)
     }
 
-    // Validate balance configuration: max >= settleTo > settleThreshold >= min
+    // Validate balance configuration: max >= settleTo >= settleThreshold >= min
     if (this._balance.settleThreshold) {
       if (!this._balance.maximum.gte(this._balance.settleTo)) {
         throw new Error('Invalid balance configuration: maximum balance must be greater than or equal to settleTo')
