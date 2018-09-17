@@ -66,10 +66,12 @@ export default class EthereumAccount {
   // Queue to handle all incoming settlements/BTP transfers
   private incomingSettlements = new Mutex()
   // Queue to handle all outgoing settlements
-  // If one settlement is occuring, only a single settlement can be queued
-  private outgoingSettlements = new Mutex(1)
+  // If a settlement is occuring, only a single settlement can be queued
+  private outgoingSettlements = new Mutex(2)
+  // Queue of (at most) a single transaction to claim the incoming channel
+  private claimTransaction = new Mutex(1)
   // Timer/interval for channel watcher to claim incoming, settling channels
-  private watcher: NodeJS.Timer
+  private watcher?: NodeJS.Timer
 
   constructor (opts: {
     accountName: string,
@@ -582,126 +584,137 @@ export default class EthereumAccount {
   }
 
   async handleMoney (message: BtpPacket, moneyHandler?: MoneyHandler): Promise<BtpSubProtocol[]> {
-    return this.incomingSettlements.runExclusive(() => this.handleSettlement(message, moneyHandler))
-  }
+    return this.incomingSettlements.runExclusive(async () => {
+      try {
+        const machinomy = getSubprotocol(message, 'machinomy')
 
-  private async handleSettlement (message: BtpPacket, moneyHandler?: MoneyHandler): Promise<BtpSubProtocol[]> {
-    try {
-      const machinomy = getSubprotocol(message, 'machinomy')
+        if (machinomy) {
+          this.master._log.trace(`Handling Machinomy claim for account ${this.account.accountName}`)
 
-      if (machinomy) {
-        this.master._log.trace(`Handling Machinomy claim for account ${this.account.accountName}`)
+          const claim = JSON.parse(machinomy.data.toString())
 
-        const claim = JSON.parse(machinomy.data.toString())
-
-        const hasValidSchema = claim
-          && typeof claim.value === 'string'
-          && typeof claim.channelId === 'string'
-          && typeof claim.signature === 'string'
-        if (!hasValidSchema) {
-          throw new Error(`claim schema is malformed`)
-        }
-
-        const oldClaim = this.account.bestIncomingClaim
-
-        // If the account already has a channel, client must be using that channel
-        // Calculating profitability across multiple incoming channels sounds like a receipe for disaster
-        if (oldClaim && oldClaim.channelId !== claim.channelId) {
-          throw new Error(`account ${this.account.accountName} must use channel ${oldClaim.channelId}`)
-        }
-
-        // Always fetch updated channel state from network
-        const channel = await fetchChannel(this.master._web3, claim.channelId)
-        if (!channel) {
-          throw new Error(`channel is already settled or doesn't exist`)
-        }
-
-        // Even if the sender started settling, still accept the claim: we don't mind if they send us more money!
-
-        const contractAddress = (await getNetwork(this.master._web3)).unidirectional.address
-        // @ts-ignore http://web3js.readthedocs.io/en/1.0/web3-utils.html#soliditysha3
-        const paymentDigest = Web3.utils.soliditySha3(contractAddress, claim.channelId, claim.value)
-        const senderAddress = this.master._web3.eth.accounts.recover(paymentDigest, claim.signature)
-        const isValidSignature = senderAddress === channel.sender
-        if (!isValidSignature) {
-          throw new Error(`signature is invalid, or sender is using contracts on a different network`)
-        }
-
-        if (new BigNumber(claim.value).lte(0)) {
-          throw new Error(`value of claim is 0 or negative`)
-        }
-
-        const oldClaimValue = new BigNumber(oldClaim ? oldClaim.value : 0)
-        const newClaimValue = BigNumber.min(channel.value, claim.value)
-        let claimIncrement = newClaimValue.minus(oldClaimValue)
-        if (claimIncrement.eq(0)) {
-          this.master._log.trace(`Disregarding incoming claim: value of ${format(claim.value, Unit.Wei)} is same as previous claim`)
-          // Respond to the request normally, not with an error:
-          // Peer may have deposited to the channel and think it's confirmed, but we don't see it yet, causing them to send
-          // a claim value greater than the amount that's in the channel
-          return []
-        } else if (claimIncrement.lt(0)) {
-          throw new Error(`claim value of ${format(claim.value, Unit.Wei)} is less than previous claim for ${format(oldClaimValue, Unit.Wei)}`)
-        }
-
-        // If no channel is linked to this account, perform additional validation
-        if (!oldClaim) {
-          // Each channel key is a mapping of channelId -> accountName to ensure no channel can be linked to multiple accounts
-          // No race condition: a new linked channel will be cached at the end of this closure
-          const channelKey = `${claim.channelId}:incoming-channel`
-          await this.master._store.load(channelKey)
-          const linkedAccount = this.master._store.get(channelKey)
-          const canLinkChannel = !linkedAccount || linkedAccount === this.account.accountName
-          if (!canLinkChannel) {
-            throw new Error(`channel ${claim.channelId} is already linked to a different account`)
+          const hasValidSchema = claim
+            && typeof claim.value === 'string'
+            && typeof claim.channelId === 'string'
+            && typeof claim.signature === 'string'
+          if (!hasValidSchema) {
+            throw new Error(`claim schema is malformed`)
           }
 
-          // Check the channel is to the server's address
-          // (only check for new channels, not per claim, in case the server restarts and changes config)
-          const amReceiver = channel.receiver.toLowerCase() === this.master._ethereumAddress.toLowerCase()
-          if (!amReceiver) {
-            throw new Error(`the recipient for incoming channel ${claim.channelId} is not ${this.master._ethereumAddress}`)
+          const oldClaim = this.account.bestIncomingClaim
+
+          // If the account already has a channel, client must be using that channel
+          // Calculating profitability across multiple incoming channels sounds like a receipe for disaster
+          if (oldClaim && oldClaim.channelId !== claim.channelId) {
+            throw new Error(`account ${this.account.accountName} must use channel ${oldClaim.channelId}`)
           }
 
-          // Confirm the settling period for the channel is above the minimum
-          const isAboveMinSettlementPeriod = channel.settlingPeriod.gte(this.master._minIncomingSettlementPeriod)
-          if (!isAboveMinSettlementPeriod) {
-            throw new Error(`channel ${channel.channelId} has settling period of ${channel.settlingPeriod} blocks,`
-              + `below floor of ${this.master._minIncomingSettlementPeriod} blocks`)
+          // Always fetch updated channel state from network
+          const channel = await fetchChannel(this.master._web3, claim.channelId)
+          if (!channel) {
+            throw new Error(`channel is already settled or doesn't exist`)
           }
 
-          // Deduct the initiation fee (e.g. this could be used to cover the cost of the claim tx to close the channel)
-          claimIncrement = claimIncrement.minus(this.master._incomingChannelFee)
-          if (claimIncrement.lt(0)) {
-            throw new Error(`claim value of ${format(newClaimValue, Unit.Wei)} is insufficient to cover the initiation fee of ` +
-              `${format(this.master._incomingChannelFee, Unit.Wei)}`)
+          // Even if the sender started settling, still accept the claim: we don't mind if they send us more money!
+
+          const contractAddress = (await getNetwork(this.master._web3)).unidirectional.address
+          // @ts-ignore http://web3js.readthedocs.io/en/1.0/web3-utils.html#soliditysha3
+          const paymentDigest = Web3.utils.soliditySha3(contractAddress, claim.channelId, claim.value)
+          const senderAddress = this.master._web3.eth.accounts.recover(paymentDigest, claim.signature)
+          const isValidSignature = senderAddress === channel.sender
+          if (!isValidSignature) {
+            throw new Error(`signature is invalid, or sender is using contracts on a different network`)
           }
 
-          this.master._store.set(channelKey, this.account.accountName)
-          this.master._log.trace(`Incoming channel ${claim.channelId} is now linked to account ${this.account.accountName}`)
+          if (new BigNumber(claim.value).lte(0)) {
+            throw new Error(`value of claim is 0 or negative`)
+          }
+
+          const oldClaimValue = new BigNumber(oldClaim ? oldClaim.value : 0)
+          const newClaimValue = BigNumber.min(channel.value, claim.value)
+          let claimIncrement = newClaimValue.minus(oldClaimValue)
+          if (claimIncrement.eq(0)) {
+            this.master._log.trace(`Disregarding incoming claim: value of ${format(claim.value, Unit.Wei)} is same as previous claim`)
+            // Respond to the request normally, not with an error:
+            // Peer may have deposited to the channel and think it's confirmed, but we don't see it yet, causing them to send
+            // a claim value greater than the amount that's in the channel
+            return []
+          } else if (claimIncrement.lt(0)) {
+            throw new Error(`claim value of ${format(claim.value, Unit.Wei)} is less than previous claim for ${format(oldClaimValue, Unit.Wei)}`)
+          }
+
+          // If no channel is linked to this account, perform additional validation
+          if (!oldClaim) {
+            // Each channel key is a mapping of channelId -> accountName to ensure no channel can be linked to multiple accounts
+            // No race condition: a new linked channel will be cached at the end of this closure
+            const channelKey = `${claim.channelId}:incoming-channel`
+            await this.master._store.load(channelKey)
+            const linkedAccount = this.master._store.get(channelKey)
+            const canLinkChannel = !linkedAccount || linkedAccount === this.account.accountName
+            if (!canLinkChannel) {
+              throw new Error(`channel ${claim.channelId} is already linked to a different account`)
+            }
+
+            // Check the channel is to the server's address
+            // (only check for new channels, not per claim, in case the server restarts and changes config)
+            const amReceiver = channel.receiver.toLowerCase() === this.master._ethereumAddress.toLowerCase()
+            if (!amReceiver) {
+              throw new Error(`the recipient for incoming channel ${claim.channelId} is not ${this.master._ethereumAddress}`)
+            }
+
+            // Confirm the settling period for the channel is above the minimum
+            const isAboveMinSettlementPeriod = channel.settlingPeriod.gte(this.master._minIncomingSettlementPeriod)
+            if (!isAboveMinSettlementPeriod) {
+              throw new Error(`channel ${channel.channelId} has settling period of ${channel.settlingPeriod} blocks,`
+                + `below floor of ${this.master._minIncomingSettlementPeriod} blocks`)
+            }
+
+            // Deduct the initiation fee (e.g. this could be used to cover the cost of the claim tx to close the channel)
+            claimIncrement = claimIncrement.minus(this.master._incomingChannelFee)
+            if (claimIncrement.lt(0)) {
+              throw new Error(`claim value of ${format(newClaimValue, Unit.Wei)} is insufficient to cover the initiation fee of ` +
+                `${format(this.master._incomingChannelFee, Unit.Wei)}`)
+            }
+
+            this.master._store.set(channelKey, this.account.accountName)
+            this.master._log.trace(`Incoming channel ${claim.channelId} is now linked to account ${this.account.accountName}`)
+
+            // Subscribe to settling events for the new linked channel
+            const contract = await getContract(this.master._web3)
+            contract.events.DidStartSettling({
+              filter: {
+                channelId: claim.channelId
+              }
+            }).on('data', event => {
+              // If the settling transaction was mined, attempt to claim
+              if (event.blockNumber) {
+                this.claimIfProfitable(true)
+              }
+            })
+          }
+
+          this.account.bestIncomingClaim = claim
+          this.master._log.info(`Accepted incoming claim from account ${this.account.accountName} for ${format(claimIncrement, Unit.Wei)}`)
+
+          const amount = convert(claimIncrement, Unit.Wei, Unit.Gwei).dp(0, BigNumber.ROUND_DOWN)
+          this.subBalance(amount)
+
+          if (typeof moneyHandler !== 'function') {
+            throw new Error('no money handler registered')
+          }
+
+          moneyHandler(amount.toString())
+        } else {
+          throw new Error(`BTP TRANSFER packet did not include any 'machinomy' subprotocol data`)
         }
 
-        this.account.bestIncomingClaim = claim
-        this.master._log.info(`Accepted incoming claim from account ${this.account.accountName} for ${format(claimIncrement, Unit.Wei)}`)
-
-        const amount = convert(claimIncrement, Unit.Wei, Unit.Gwei).dp(0, BigNumber.ROUND_DOWN)
-        this.subBalance(amount)
-
-        if (typeof moneyHandler !== 'function') {
-          throw new Error('no money handler registered')
-        }
-
-        moneyHandler(amount.toString())
-      } else {
-        throw new Error(`BTP TRANSFER packet did not include any 'machinomy' subprotocol data`)
+        return []
+      } catch (err) {
+        this.master._log.trace(`Failed to validate claim: ${err.message}`)
+        // Don't expose internal errors: this could be problematic if an error wasn't intentionally thrown
+        throw new Error('Invalid claim')
       }
-
-      return []
-    } catch (err) {
-      this.master._log.trace(`Failed to validate claim: ${err.message}`)
-      // Don't expose internal errors: this could be problematic if an error wasn't intentionally thrown
-      throw new Error('Invalid claim')
-    }
+    })
   }
 
   // Handle the response from a forwarded ILP PREPARE
@@ -723,7 +736,7 @@ export default class EthereumAccount {
     }
   }
 
-  private async startChannelWatcher () {
+  private startChannelWatcher (): void {
     const interval = 10 * 60 * 1000 // Every 10 minutes
     const timer = setInterval(async () => {
       const claim = this.account.bestIncomingClaim
@@ -735,7 +748,7 @@ export default class EthereumAccount {
         })
 
       if (channel && isSettling(channel)) {
-        this.claimIfProfitable()
+        this.claimIfProfitable(true)
       }
     }, interval)
     // Check if we're in a Node.js environment
@@ -746,48 +759,56 @@ export default class EthereumAccount {
     this.watcher = timer
   }
 
-  private async claimIfProfitable (): Promise<void> {
-    try {
-      const claim = this.account.bestIncomingClaim
-      if (!claim) return
+  private claimIfProfitable (requireSettling = false): Promise<void> {
+    return this.claimTransaction.runExclusive(async () => {
+      try {
+        const claim = this.account.bestIncomingClaim
+        if (!claim) return
 
-      const channel = await fetchChannel(this.master._web3, claim.channelId)
-      if (!channel) {
-        return this.master._log.trace(`Cannot claim channel ${claim.channelId} with ${this.account.accountName}: linked channel doesn't exist or is settled`)
+        const channel = await fetchChannel(this.master._web3, claim.channelId)
+        if (!channel) {
+          return this.master._log.trace(`Cannot claim channel ${claim.channelId} with ${this.account.accountName}: linked channel doesn't exist or is settled`)
+        }
+
+        if (requireSettling && !isSettling(channel)) {
+          return this.master._log.trace(`Cannot claim channel ${claim.channelId} with ${this.account.accountName}: channel is not settling`)
+        }
+
+        this.master._log.trace(`Attempting to claim channel ${claim.channelId} for ${format(claim.value, Unit.Wei)}`)
+
+        const contract = await getContract(this.master._web3)
+        const txObj = contract.methods.claim(claim.channelId, claim.value, claim.signature)
+        const tx = await generateTx({
+          txObj,
+          from: channel.receiver,
+          web3: this.master._web3
+        })
+
+        // Check to verify it's profitable first
+        // This fee should already be accounted for in balance as apart of the initiation fee
+        const txFee = new BigNumber(tx.gasPrice).times(tx.gas)
+        if (txFee.gte(claim.value)) {
+          return this.master._log.trace(`Not profitable to claim incoming settling channel ${claim.channelId} with ${this.account.accountName}: ` +
+            `fee of ${format(txFee, Unit.Wei)} is greater than value of ${format(claim.value, Unit.Wei)}`)
+        }
+
+        const receipt = await this.master._web3.eth.sendTransaction(tx)
+
+        if (!receipt.status) {
+          this.master._log.trace(`Failed to claim channel ${claim.channelId}: transaction reverted by EVM`)
+        } else {
+          this.master._log.trace(`Successfully claimed channel ${claim.channelId} for account ${this.account.accountName}`)
+        }
+      } catch (err) {
+        this.master._log.error(`Failed to claim channel: ${err.message}`)
       }
-
-      this.master._log.trace(`Attempting to claim channel ${claim.channelId} for ${format(claim.value, Unit.Wei)}`)
-
-      const contract = await getContract(this.master._web3)
-      const txObj = contract.methods.claim(claim.channelId, claim.value, claim.signature)
-      const tx = await generateTx({
-        txObj,
-        from: channel.receiver,
-        web3: this.master._web3
-      })
-
-      const txFee = new BigNumber(tx.gasPrice).times(tx.gas)
-      // Check to verify it's profitable first
-      // This fee should already be accounted for in balance as apart of the initiation fee
-      if (txFee.gte(claim.value)) {
-        return this.master._log.trace(`Not profitable to claim incoming settling channel ${claim.channelId} with ${this.account.accountName}: ` +
-          `fee of ${format(txFee, Unit.Wei)} is greater than value of ${format(claim.value, Unit.Wei)}`)
-      }
-
-      const receipt = await this.master._web3.eth.sendTransaction(tx)
-
-      if (!receipt.status) {
-        this.master._log.trace(`Failed to claim channel ${claim.channelId}: transaction reverted by EVM`)
-      } else {
-        this.master._log.trace(`Successfully claimed channel ${claim.channelId} for account ${this.account.accountName}`)
-      }
-    } catch (err) {
-      this.master._log.error(`Failed to claim channel: ${err.message}`)
-    }
+    })
   }
 
   async disconnect (): Promise<void> {
-    clearInterval(this.watcher)
+    if (this.watcher) {
+      clearInterval(this.watcher)
+    }
 
     // Finish processing all incoming settlements before claiming & disconnecting
     await Promise.all([
