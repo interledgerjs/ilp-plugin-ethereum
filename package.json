@@ -10,7 +10,7 @@
     "lint": "tslint --project .",
     "postinstall": "npm run build",
     "test": "ava src/__tests__/**/*.ts --serial --verbose --fail-fast --timeout=3m",
-    "test-inspect": "node --inspect node_modules/ava/profile.js src/__tests__/integration.test.ts --serial --verbose --fail-fast --timeout=3m"
+    "test-inspect": "node --inspect node_modules/ava/profile.js src/__tests__/watcher.test.ts --serial --verbose --fail-fast --timeout=3m"
   },
   "repository": {
     "type": "git",
@@ -51,6 +51,7 @@
     "ava": "github:avajs/ava",
     "get-port": "^4.0.0",
     "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#ko-receive-only",
+    "ilp-store-memory": "^1.0.0",
     "standard": "^11.0.1",
     "ts-node": "^7.0.1",
     "tslint": "^5.11.0",

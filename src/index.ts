@@ -44,7 +44,7 @@ interface EthereumPluginOpts {
   // (negative balance implies this instance owes the counterparty)
   // Debits add to the balance; credits subtract from the balance
   // maximum >= settleTo > settleThreshold >= minimum (gwei)
-  balance: {
+  balance?: {
     // Maximum balance counterparty owes this instance before further balance additions are rejected
     // e.g. settlements and forwarding of PREPARE packets with debits that increase balance above maximum would be rejected
     maximum?: BigNumber.Value
@@ -57,7 +57,8 @@ interface EthereumPluginOpts {
     // Maximum this instance owes the counterparty before further balance subtractions are rejected
     // e.g. incoming money/claims and forwarding of FULFILL packets with credits that reduce balance below minimum would be rejected
     minimum?: BigNumber.Value
-  }
+  },
+  channelWatcherInterval?: BigNumber.Value
   _store?: any // resolves incompatiblities with the older ilp-store-wrapper used by mini-accounts
   _log?: Logger
 }
@@ -87,6 +88,7 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
     settleThreshold?: BigNumber
     minimum: BigNumber
   }
+  readonly _channelWatcherInterval: BigNumber // ms
   readonly _store: any // Resolves incompatiblities with the older ilp-store-wrapper used by mini-accounts
   readonly _log: Logger
 
@@ -104,9 +106,12 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
     balance: {
       maximum = Infinity,
       settleTo = 0,
-      settleThreshold,
+      settleThreshold = undefined,
       minimum = -Infinity
-    },
+    } = {},
+    // For watcher interval, defaults to minimum of ~1000 cycles with min settlement period
+    channelWatcherInterval =
+      new BigNumber(minIncomingSettlementPeriod).times(15).div(1000),
     // Ethereum specific params are not passed to mini-accounts/plugin-btp
     ...opts
   }: EthereumPluginOpts) {
@@ -169,6 +174,9 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
       minimum: new BigNumber(minimum)
         .dp(0, BigNumber.ROUND_CEIL)
     }
+
+    this._channelWatcherInterval = new BigNumber(channelWatcherInterval)
+      .abs().dp(0, BigNumber.ROUND_DOWN)
 
     // Validate balance configuration: max >= settleTo >= settleThreshold >= min
     if (this._balance.settleThreshold) {

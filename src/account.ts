@@ -679,18 +679,20 @@ export default class EthereumAccount {
             this.master._store.set(channelKey, this.account.accountName)
             this.master._log.trace(`Incoming channel ${claim.channelId} is now linked to account ${this.account.accountName}`)
 
+            // TODO web3.js beta 36 event bugs: https://github.com/ethereum/web3.js/issues/1916
             // Subscribe to settling events for the new linked channel
-            const contract = await getContract(this.master._web3)
-            contract.events.DidStartSettling({
-              filter: {
-                channelId: claim.channelId
-              }
-            }).on('data', event => {
-              // If the settling transaction was mined, attempt to claim
-              if (event.blockNumber) {
-                this.claimIfProfitable(true)
-              }
-            })
+            // const contract = await getContract(this.master._web3)
+            // contract.events.DidStartSettling({
+            //   filter: {
+            //     fromBlock: 'latest',
+            //     channelId: claim.channelId
+            //   }
+            // }).on('data', event => {
+            //   // If the settling transaction was mined, attempt to claim
+            //   if (event.blockNumber) {
+            //     this.claimIfProfitable(true)
+            //   }
+            // })
           }
 
           this.account.bestIncomingClaim = claim
@@ -737,7 +739,7 @@ export default class EthereumAccount {
   }
 
   private startChannelWatcher (): void {
-    const interval = 10 * 60 * 1000 // Every 10 minutes
+    const interval = this.master._channelWatcherInterval.toNumber()
     const timer = setInterval(async () => {
       const claim = this.account.bestIncomingClaim
       if (!claim) return
