@@ -12,7 +12,7 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
 
   const web3 = new Web3('wss://ropsten.infura.io/ws')
 
-  const port = await getPort()
+  const port = await (getPort() as Promise<number>)
 
   const clientStore = new MemoryStore() as Store
   const clientPlugin = new EthereumPlugin({

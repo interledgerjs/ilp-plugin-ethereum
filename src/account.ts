@@ -566,6 +566,7 @@ export default class EthereumAccount {
           // Forward the packet to data handler, wait for response
           dataHandler(ilp.data)
         ])
+        // tslint:disable-next-line:no-unnecessary-type-assertion
         clearTimeout(timer!)
 
         if (response[0] === IlpPacket.Type.TYPE_ILP_REJECT) {
@@ -705,7 +706,7 @@ export default class EthereumAccount {
             throw new Error('no money handler registered')
           }
 
-          moneyHandler(amount.toString())
+          await moneyHandler(amount.toString())
         } else {
           throw new Error(`BTP TRANSFER packet did not include any 'machinomy' subprotocol data`)
         }
@@ -732,6 +733,9 @@ export default class EthereumAccount {
       this.account.payoutAmount = this.account.payoutAmount.plus(amount)
 
       this.outgoingSettlements.runExclusive(() => this.attemptSettle())
+        .catch(err => {
+          this.master._log.trace(`Error queueing an outgoing settlement: ${err.message}`)
+        })
     } catch (err) {
       this.master._log.trace(`Failed to fulfill response to PREPARE: ${err.message}`)
       throw new IlpPacket.Errors.InsufficientLiquidityError(err.message)
@@ -741,16 +745,17 @@ export default class EthereumAccount {
   private startChannelWatcher (): void {
     const interval = this.master._channelWatcherInterval.toNumber()
     const timer = setInterval(async () => {
-      const claim = this.account.bestIncomingClaim
-      if (!claim) return
+      try {
+        const claim = this.account.bestIncomingClaim
+        if (!claim) return
 
-      const channel = await fetchChannel(this.master._web3, claim.channelId)
-        .catch(err => {
-          this.master._log.trace(err.message)
-        })
+        const channel = await fetchChannel(this.master._web3, claim.channelId)
 
-      if (channel && isSettling(channel)) {
-        this.claimIfProfitable(true)
+        if (channel && isSettling(channel)) {
+          await this.claimIfProfitable(true)
+        }
+      } catch (err) {
+        this.master._log.trace(`Error while running channel watcher: ${err.message}`)
       }
     }, interval)
     // Check if we're in a Node.js environment

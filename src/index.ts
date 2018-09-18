@@ -3,12 +3,9 @@ import StoreWrapper from './utils/store-wrapper'
 import { Logger, PluginInstance, DataHandler, MoneyHandler } from './utils/types'
 import Web3 = require('web3')
 import BigNumber from 'bignumber.js'
-import BtpPlugin, { BtpPacket, BtpSubProtocol } from 'ilp-plugin-btp'
-import MiniAccountsPlugin from 'ilp-plugin-mini-accounts'
-import EthereumAccount, { requestId, convert, Unit } from './account'
-import * as IlpPacket from 'ilp-packet'
+import { convert, Unit } from './account'
+import { EthereumClientPlugin, EthereumServerPlugin } from './plugin'
 import * as ethUtil from 'ethereumjs-util'
-const BtpPacket = require('btp-packet')
 
 import * as debug from 'debug'
 import createLogger from 'ilp-logger'
@@ -68,7 +65,7 @@ const OUTGOING_CHANNEL_AMOUNT = convert('0.04', Unit.Eth, Unit.Gwei)
 const INCOMING_SETTLEMENT_PERIOD = 3 * 24 * 60 * 60 / 15 // ~3 days, assuming 15 second block times
 const OUTGOING_SETTLEMENT_PERIOD = 2 * INCOMING_SETTLEMENT_PERIOD
 
-class EthereumPlugin extends EventEmitter2 implements PluginInstance {
+export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
   static readonly version = 2
   private readonly _role: 'client' | 'server'
   private readonly _plugin: EthereumClientPlugin | EthereumServerPlugin
@@ -117,6 +114,7 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
   }: EthereumPluginOpts) {
     super()
 
+    // tslint:disable-next-line:strict-type-predicates
     if (typeof ethereumPrivateKey !== 'string') {
       throw new Error('Ethereum private key is required')
     }
@@ -246,114 +244,3 @@ class EthereumPlugin extends EventEmitter2 implements PluginInstance {
     return this._plugin.deregisterMoneyHandler()
   }
 }
-
-class EthereumClientPlugin extends BtpPlugin implements PluginInstance {
-  private _account: EthereumAccount
-
-  constructor (opts: any) {
-    super(opts)
-
-    this._account = new EthereumAccount({
-      master: opts.master,
-      accountName: 'server',
-      sendMessage: (message: BtpPacket) =>
-        this._call('', message)
-    })
-  }
-
-  async _connect (): Promise<void> {
-    return this._account.connect()
-  }
-
-  _handleData (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> {
-    return this._account.handleData(message, this._dataHandler)
-  }
-
-  _handleMoney (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> {
-    return this._account.handleMoney(message, this._moneyHandler)
-  }
-
-  // Add hooks into sendData before and after sending a packet for balance updates and settlement, akin to mini-accounts
-  async sendData (buffer: Buffer): Promise<Buffer> {
-    const preparePacket = IlpPacket.deserializeIlpPacket(buffer)
-
-    const response = await this._call('', {
-      type: BtpPacket.TYPE_MESSAGE,
-      requestId: await requestId(),
-      data: {
-        protocolData: [{
-          protocolName: 'ilp',
-          contentType: BtpPacket.MIME_APPLICATION_OCTET_STREAM,
-          data: buffer
-        }]
-      }
-    })
-
-    const ilpResponse = response.protocolData.find(p => p.protocolName === 'ilp')
-    if (ilpResponse) {
-      const responsePacket = IlpPacket.deserializeIlpPacket(ilpResponse.data)
-      await this._account.handlePrepareResponse(preparePacket, responsePacket)
-      return ilpResponse.data
-    }
-
-    return Buffer.alloc(0)
-  }
-
-  _disconnect (): Promise<void> {
-    return this._account.disconnect()
-  }
-}
-
-class EthereumServerPlugin extends MiniAccountsPlugin implements PluginInstance {
-  private _accounts: Map<string, EthereumAccount> // accountName -> account
-  private _master: EthereumPlugin
-
-  constructor (opts: any) {
-    super(opts)
-
-    this._master = opts.master
-    this._accounts = new Map()
-  }
-
-  _getAccount (address: string) {
-    const accountName = this.ilpAddressToAccount(address)
-    let account = this._accounts.get(accountName)
-
-    if (!account) {
-      account = new EthereumAccount({
-        accountName,
-        master: this._master,
-        sendMessage: (message: BtpPacket) =>
-          this._call(address, message)
-      })
-
-      this._accounts.set(accountName, account)
-    }
-
-    return account
-  }
-
-  _connect (address: string, message: BtpPacket): Promise<void> {
-    return this._getAccount(address).connect()
-  }
-
-  _handleCustomData = async (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> =>
-    this._getAccount(from).handleData(message, this._dataHandler)
-
-  _handleMoney (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> {
-    return this._getAccount(from).handleMoney(message, this._moneyHandler)
-  }
-
-  _handlePrepareResponse = async (
-    destination: string,
-    responsePacket: IlpPacket.IlpPacket,
-    preparePacket: IlpPacket.IlpPacket
-  ): Promise<void> =>
-    this._getAccount(destination).handlePrepareResponse(preparePacket, responsePacket)
-
-  _close (from: string): Promise<void> {
-    return this._getAccount(from).disconnect()
-  }
-}
-
-export = EthereumPlugin

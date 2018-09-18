@@ -57,7 +57,7 @@ test('client streams data and money to server', async t => {
   let clientConn: IlpStream.Connection
   let clientStream: IlpStream.DataAndMoneyStream
 
-  const port = await getPort()
+  const port = await (getPort() as Promise<number>)
 
   const clientPlugin = new EthereumPlugin({
     role: 'client',

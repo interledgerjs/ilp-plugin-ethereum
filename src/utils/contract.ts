@@ -72,6 +72,28 @@ export interface Tx {
   gasPrice: string | number
 }
 
+export const generateChannelId = async () =>
+  '0x' + (await promisify(randomBytes)(32)).toString('hex')
+
+export const getNetwork = async (web3: Web3): Promise<Network> => {
+  const chainId = await web3.eth.net.getId()
+  const network = NETWORKS[chainId]
+
+  if (!network) {
+    throw new Error('Machinomy is not supported on the current network')
+  }
+
+  return network
+}
+
+export const getContract = async (web3: Web3) => {
+  const network = await getNetwork(web3)
+  return new web3.eth.Contract(
+    network.unidirectional.abi,
+    network.unidirectional.address
+  )
+}
+
 export const fetchChannel = async (web3: Web3, channelId: string): Promise<Channel | null> => {
   try {
     const contract = await getContract(web3)
@@ -100,28 +122,6 @@ export const fetchChannel = async (web3: Web3, channelId: string): Promise<Chann
   } catch (err) {
     throw new Error(`Failed to fetch channel details: ${err.message}`)
   }
-}
-
-export const generateChannelId = async () =>
-  '0x' + (await promisify(randomBytes)(32)).toString('hex')
-
-export const getNetwork = async (web3: Web3): Promise<Network> => {
-  const chainId = await web3.eth.net.getId()
-  const network = NETWORKS[chainId]
-
-  if (!network) {
-    throw new Error('Machinomy is not supported on the current network')
-  }
-
-  return network
-}
-
-export const getContract = async (web3: Web3) => {
-  const network = await getNetwork(web3)
-  return new web3.eth.Contract(
-    network.unidirectional.abi,
-    network.unidirectional.address
-  )
 }
 
 export const generateTx = async ({ web3, txObj, from, value = 0 }: {
