@@ -95,13 +95,15 @@ workflows:
               ignore:
                 - gh-pages
       - build_node_v8:
+          requires:
+            - build
           filters:
             branches:
               ignore:
                 - gh-pages
       - publish_to_npm:
           requires:
-            - build
+            - build_node_v8
           filters:
             branches:
               only:
