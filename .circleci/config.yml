@@ -79,14 +79,21 @@ jobs:
           name: Publish package
           command: npm publish --tag next
 
+# https://circleci.com/docs/2.0/workflows/#executing-workflows-for-a-git-tag
 workflows:
   version: 2
   build_and_publish:
     jobs:
-      - build
+      - build:
+          filters:
+            tags:
+              only: /.*/
       - build_node_v8:
           requires:
             - build
+          filters:
+            tags:
+              only: /.*/
       - publish:
           requires:
             - build_node_v8
