@@ -62,7 +62,7 @@ interface EthereumPluginOpts {
 
 const OUTGOING_CHANNEL_AMOUNT = convert('0.04', Unit.Eth, Unit.Gwei)
 
-const INCOMING_SETTLEMENT_PERIOD = 3 * 24 * 60 * 60 / 15 // ~3 days, assuming 15 second block times
+const INCOMING_SETTLEMENT_PERIOD = 3 * 24 * 60 * 60 / 15 // ~ 3 days, assuming 15 second block times
 const OUTGOING_SETTLEMENT_PERIOD = 2 * INCOMING_SETTLEMENT_PERIOD
 
 export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
@@ -92,7 +92,7 @@ export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
   constructor ({
     role = 'client',
     ethereumPrivateKey,
-    ethereumProvider,
+    ethereumProvider = 'wss://mainnet.infura.io/ws',
     settleOnConnect = role === 'client',
     claimOnDisconnect = role === 'client',
     incomingChannelFee = 0,
@@ -128,7 +128,7 @@ export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
       throw new Error('Invalid Ethereum private key')
     }
 
-    this._web3 = new Web3(ethereumProvider || 'wss://mainnet.infura.io/ws')
+    this._web3 = new Web3(ethereumProvider)
     this._ethereumAddress = this._web3.eth.accounts.wallet.add(ethereumPrivateKey).address
 
     this._role = role
@@ -224,7 +224,7 @@ export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
     return this._plugin.sendData(data)
   }
 
-  async sendMoney (amount: string) {
+  async sendMoney () {
     this._log.error('sendMoney is not supported: use plugin balance configuration instead of connector balance for settlement')
   }
 

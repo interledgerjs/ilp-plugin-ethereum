@@ -1,4 +1,3 @@
-node_modules/
-yarn-error.log
-.vscode
-build/
+node_modules
+build
+.nyc_output
