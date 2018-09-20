@@ -723,23 +723,32 @@ export default class EthereumAccount {
 
   // Handle the response from a forwarded ILP PREPARE
   handlePrepareResponse (preparePacket: IlpPacket.IlpPacket, responsePacket: IlpPacket.IlpPacket): void {
-    if (responsePacket.type !== IlpPacket.Type.TYPE_ILP_FULFILL) return
+    const isFulfill = responsePacket.type === IlpPacket.Type.TYPE_ILP_FULFILL
+    const isReject = responsePacket.type === IlpPacket.Type.TYPE_ILP_REJECT
 
-    this.master._log.trace(`Received a FULFILL in response to the forwarded PREPARE from sendData`)
+    // Attempt to settle on fulfills and* T04s (to resolve stalemates)
+    const attemptSettle = isFulfill || (isReject && responsePacket.data.code === 'T04')
 
-    // Update balance to reflect that we owe them the amount of the FULFILL
-    let amount = new BigNumber(preparePacket.data.amount)
-    try {
-      this.subBalance(amount)
-      this.account.payoutAmount = this.account.payoutAmount.plus(amount)
+    if (isFulfill) {
+      this.master._log.trace(`Received a FULFILL in response to the forwarded PREPARE from sendData`)
 
+      // Update balance to reflect that we owe them the amount of the FULFILL
+      let amount = new BigNumber(preparePacket.data.amount)
+      try {
+        this.subBalance(amount)
+        this.account.payoutAmount = this.account.payoutAmount.plus(amount)
+      } catch (err) {
+          // Balance update likely dropped below the minimum, so throw an internal error
+        this.master._log.trace(`Failed to fulfill response to PREPARE: ${err.message}`)
+        throw new IlpPacket.Errors.InternalError(err.message)
+      }
+    }
+
+    if (attemptSettle) {
       this.outgoingSettlements.runExclusive(() => this.attemptSettle())
         .catch(err => {
           this.master._log.trace(`Error queueing an outgoing settlement: ${err.message}`)
         })
-    } catch (err) {
-      this.master._log.trace(`Failed to fulfill response to PREPARE: ${err.message}`)
-      throw new IlpPacket.Errors.InsufficientLiquidityError(err.message)
     }
   }
 
