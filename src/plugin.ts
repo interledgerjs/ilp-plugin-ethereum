@@ -5,6 +5,7 @@ import MiniAccountsPlugin from 'ilp-plugin-mini-accounts'
 import { PluginInstance } from './utils/types'
 import * as IlpPacket from 'ilp-packet'
 const BtpPacket = require('btp-packet')
+import 'source-map-support/register'
 
 export class EthereumClientPlugin extends BtpPlugin implements PluginInstance {
   private _account: EthereumAccount

@@ -1,14 +1,14 @@
 import { EventEmitter2 } from 'eventemitter2'
-import StoreWrapper from './utils/store-wrapper'
+import { StoreWrapper } from './utils/store'
 import { Logger, PluginInstance, DataHandler, MoneyHandler } from './utils/types'
 import Web3 = require('web3')
 import BigNumber from 'bignumber.js'
 import { convert, Unit } from './account'
 import { EthereumClientPlugin, EthereumServerPlugin } from './plugin'
 import * as ethUtil from 'ethereumjs-util'
-
 import * as debug from 'debug'
 import createLogger from 'ilp-logger'
+import 'source-map-support/register'
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 

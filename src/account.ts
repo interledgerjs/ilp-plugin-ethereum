@@ -19,6 +19,7 @@ import {
   isSettling
 } from './utils/contract'
 import Mutex from './utils/queue'
+import 'source-map-support/register'
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 

@@ -3,6 +3,7 @@ import { TransactionObject } from 'web3/eth/types'
 import BigNumber from 'bignumber.js'
 import { randomBytes } from 'crypto'
 import { promisify } from 'util'
+import 'source-map-support/register'
 
 import * as UNIDIRECTIONAL_MAINNET from '../abi/Unidirectional-mainnet.json'
 import * as UNIDIRECTIONAL_TESTNET from '../abi/Unidirectional-testnet.json'
