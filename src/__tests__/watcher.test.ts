@@ -3,22 +3,22 @@ import * as getPort from 'get-port'
 import EthereumPlugin = require('..')
 import { convert, Unit } from '../account'
 import { getContract, generateTx } from '../utils/contract'
-import { Store } from '../utils/store-wrapper'
+import { MemoryStore } from '../utils/store'
 import test from 'ava'
-const MemoryStore = require('ilp-store-memory')
+import 'source-map-support/register'
 
 test(`channel watcher claims settling channel if it's profitable`, async t => {
   t.plan(1)
 
-  const web3 = new Web3('wss://ropsten.infura.io/ws')
+  const web3 = new Web3(process.env.ETHEREUM_PROVIDER)
 
   const port = await (getPort() as Promise<number>)
 
-  const clientStore = new MemoryStore() as Store
+  const clientStore = new MemoryStore()
   const clientPlugin = new EthereumPlugin({
     role: 'client',
-    ethereumPrivateKey: process.env.PRIVATE_KEY_A!,
-    ethereumProvider: 'wss://ropsten.infura.io/ws',
+    ethereumPrivateKey: process.env.PRIVATE_KEY_A,
+    ethereumProvider: process.env.ETHEREUM_PROVIDER,
     balance: {
       settleTo: convert('0.01', Unit.Eth, Unit.Gwei),
       settleThreshold: convert('0.000000001', Unit.Eth, Unit.Gwei)
@@ -30,8 +30,8 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
 
   const serverPlugin = new EthereumPlugin({
     role: 'server',
-    ethereumPrivateKey: process.env.PRIVATE_KEY_B!,
-    ethereumProvider: 'wss://ropsten.infura.io/ws',
+    ethereumPrivateKey: process.env.PRIVATE_KEY_B,
+    ethereumProvider: process.env.ETHEREUM_PROVIDER,
     channelWatcherInterval: 5000, // Every 5 sec
     // @ts-ignore
     debugHostIldcpInfo: {

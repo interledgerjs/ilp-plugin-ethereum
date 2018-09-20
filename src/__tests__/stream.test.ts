@@ -6,9 +6,10 @@ import EthereumPlugin = require('..')
 import { convert, Unit } from '../account'
 import BigNumber from 'bignumber.js'
 import test from 'ava'
+import 'source-map-support/register'
 
 test('client streams data and money to server', async t => {
-  const web3 = new Web3('wss://ropsten.infura.io/ws')
+  const web3 = new Web3(process.env.ETHEREUM_PROVIDER)
 
   const privateKeys = [
     process.env.PRIVATE_KEY_A,
@@ -61,8 +62,8 @@ test('client streams data and money to server', async t => {
 
   const clientPlugin = new EthereumPlugin({
     role: 'client',
-    ethereumPrivateKey: process.env.PRIVATE_KEY_A!,
-    ethereumProvider: 'wss://ropsten.infura.io/ws',
+    ethereumPrivateKey: process.env.PRIVATE_KEY_A,
+    ethereumProvider: process.env.ETHEREUM_PROVIDER,
     // @ts-ignore
     server: `btp+ws://userA:secretA@localhost:${port}`,
     outgoingChannelAmount: convert('0.01', Unit.Eth, Unit.Gwei),
@@ -74,8 +75,8 @@ test('client streams data and money to server', async t => {
 
   const serverPlugin = new EthereumPlugin({
     role: 'server',
-    ethereumPrivateKey: process.env.PRIVATE_KEY_B!,
-    ethereumProvider: 'wss://ropsten.infura.io/ws',
+    ethereumPrivateKey: process.env.PRIVATE_KEY_B,
+    ethereumProvider: process.env.ETHEREUM_PROVIDER,
     // @ts-ignore
     debugHostIldcpInfo: {
       assetCode: 'ETH',

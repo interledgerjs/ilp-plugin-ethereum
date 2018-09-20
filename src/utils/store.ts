@@ -4,7 +4,27 @@ export type Store = {
   del: (key: string) => Promise<void>
 }
 
-export default class StoreWrapper {
+export class MemoryStore implements Store {
+  private _store: Map<string, string>
+
+  constructor () {
+    this._store = new Map()
+  }
+
+  async get (k: string) {
+    return this._store.get(k)
+  }
+
+  async put (k: string, v: string) {
+    this._store.set(k, v)
+  }
+
+  async del (k: string) {
+    this._store.delete(k)
+  }
+}
+
+export class StoreWrapper {
   private _store?: Store
   private _cache: Map<string, string | void | object>
   private _write: Promise<void>
