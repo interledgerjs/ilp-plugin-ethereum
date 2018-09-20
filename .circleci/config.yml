@@ -6,6 +6,13 @@ jobs:
       - image: circleci/node:10
     working_directory: ~/repo
     steps:
+      - run:
+          # By default node is installed as root and we are running as circleci
+          # Using sudo causes weird issues so we just switch to installing globals in our home dir
+          name: Setup NPM to make global installs to home directory
+          command: |
+            echo "export PATH=$HOME/bin:$PATH" >> $BASH_ENV
+            npm set prefix=$HOME
       - checkout
       # Download and cache dependencies
       - restore_cache:
@@ -34,6 +41,13 @@ jobs:
       - image: circleci/node:8
     working_directory: ~/repo_v8
     steps:
+      - run:
+          # By default node is installed as root and we are running as circleci
+          # Using sudo causes weird issues so we just switch to installing globals in our home dir
+          name: Setup NPM to make global installs to home directory
+          command: |
+            echo "export PATH=$HOME/bin:$PATH" >> $BASH_ENV
+            npm set prefix=$HOME
       - checkout
       # Download and cache dependencies
       - restore_cache:
