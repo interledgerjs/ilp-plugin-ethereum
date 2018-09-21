@@ -6,13 +6,6 @@ jobs:
       - image: circleci/node:10
     working_directory: ~/repo
     steps:
-      - run:
-          # By default node is installed as root and we are running as circleci
-          # Using sudo causes weird issues so we just switch to installing globals in our home dir
-          name: Setup NPM to make global installs to home directory
-          command: |
-            echo "export PATH=$HOME/bin:$PATH" >> $BASH_ENV
-            npm set prefix=$HOME
       - checkout
       # Download and cache dependencies
       - restore_cache:
@@ -41,13 +34,6 @@ jobs:
       - image: circleci/node:8
     working_directory: ~/repo_v8
     steps:
-      - run:
-          # By default node is installed as root and we are running as circleci
-          # Using sudo causes weird issues so we just switch to installing globals in our home dir
-          name: Setup NPM to make global installs to home directory
-          command: |
-            echo "export PATH=$HOME/bin:$PATH" >> $BASH_ENV
-            npm set prefix=$HOME
       - checkout
       # Download and cache dependencies
       - restore_cache:
@@ -79,21 +65,6 @@ jobs:
           name: Publish package
           command: npm publish
 
-  publish_next:
-    docker:
-      - image: circleci/node:10
-    working_directory: ~/repo
-    steps:
-      - attach_workspace:
-          at: ~/repo
-      - run:
-          name: Authenticate with registry
-          command: echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > ~/repo/.npmrc
-      - run:
-          name: Publish package
-          command: npm publish --tag next
-
-# https://circleci.com/docs/2.0/workflows/#executing-workflows-for-a-git-tag
 workflows:
   version: 2
   build_and_publish:
@@ -113,14 +84,6 @@ workflows:
             - build_node_v8
           filters:
             tags:
-              ignore: /^v.*-.*/ # e.g. "v3.1.0"
+              only: /^v.*/
             branches:
               ignore: /.*/
-      - publish_next:
-          requires:
-            - build_node_v8
-          filters:
-              tags:
-                only: /^v.*-.*/ # e.g. "v3.1.0-beta.3"
-              branches:
-                ignore: /.*/

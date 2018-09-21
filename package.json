@@ -4,12 +4,14 @@
   "description": "Settle Interledger payments with ether and ERC-20 tokens",
   "main": "build/index.js",
   "types": "build/index.d.ts",
+  "publishConfig": {
+    "tag": "next"
+  },
   "files": [
     "build/**/*"
   ],
   "scripts": {
     "build": "tsc",
-    "prepare": "tsc",
     "lint": "tslint --project .",
     "test": "nyc ava",
     "test-inspect": "node --inspect node_modules/ava/profile.js",
