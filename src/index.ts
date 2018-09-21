@@ -2,6 +2,7 @@ import { EventEmitter2 } from 'eventemitter2'
 import { StoreWrapper } from './utils/store'
 import { Logger, PluginInstance, DataHandler, MoneyHandler } from './utils/types'
 import Web3 = require('web3')
+import { Provider } from 'web3/providers'
 import BigNumber from 'bignumber.js'
 import { convert, Unit } from './account'
 import { EthereumClientPlugin, EthereumServerPlugin } from './plugin'
@@ -19,7 +20,7 @@ interface EthereumPluginOpts {
   ethereumPrivateKey: string
   // Provider to connect to a given Ethereum node
   // https://web3js.readthedocs.io/en/1.0/web3.html#providers
-  ethereumProvider?: string
+  ethereumProvider?: string | Provider
   // Should the plugin immediately attempt to settle with its peer on connect?
   // - Default for clients is `true`; default for servers and direct peers is `false`
   settleOnConnect?: boolean
@@ -60,11 +61,6 @@ interface EthereumPluginOpts {
   _log?: Logger
 }
 
-const OUTGOING_CHANNEL_AMOUNT = convert('0.04', Unit.Eth, Unit.Gwei)
-
-const INCOMING_SETTLEMENT_PERIOD = 3 * 24 * 60 * 60 / 15 // ~ 3 days, assuming 15 second block times
-const OUTGOING_SETTLEMENT_PERIOD = 2 * INCOMING_SETTLEMENT_PERIOD
-
 export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
   static readonly version = 2
   private readonly _role: 'client' | 'server'
@@ -93,12 +89,12 @@ export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
     role = 'client',
     ethereumPrivateKey,
     ethereumProvider = 'wss://mainnet.infura.io/ws',
-    settleOnConnect = role === 'client',
-    claimOnDisconnect = role === 'client',
+    settleOnConnect = role === 'client', // By default, if client, settle initially
+    claimOnDisconnect = role === 'client', // & claim on disconnect
     incomingChannelFee = 0,
-    outgoingChannelAmount = OUTGOING_CHANNEL_AMOUNT,
-    minIncomingSettlementPeriod = INCOMING_SETTLEMENT_PERIOD,
-    outgoingSettlementPeriod = OUTGOING_SETTLEMENT_PERIOD,
+    outgoingChannelAmount = convert('0.04', Unit.Eth, Unit.Gwei),
+    minIncomingSettlementPeriod = 3 * (24 * 60 * 60) / 15, // ~ 3 days @ 15 sec block time
+    outgoingSettlementPeriod = 6 * (24 * 60 * 60) / 15, // ~ 6 days @ 15 sec block time
     maxPacketAmount = Infinity,
     balance: {
       maximum = Infinity,
@@ -109,11 +105,12 @@ export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
     // For watcher interval, defaults to minimum of ~1000 cycles with min settlement period
     channelWatcherInterval =
       new BigNumber(minIncomingSettlementPeriod).times(15).div(1000),
-    // Ethereum specific params are not passed to mini-accounts/plugin-btp
+    // All remaining params are passed to mini-accounts/plugin-btp
     ...opts
   }: EthereumPluginOpts) {
     super()
 
+    // Web3 errors are unclear if no key was provided
     // tslint:disable-next-line:strict-type-predicates
     if (typeof ethereumPrivateKey !== 'string') {
       throw new Error('Ethereum private key is required')
@@ -138,7 +135,6 @@ export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
     this._log = opts._log || createLogger(`ilp-plugin-ethereum-${role}`)
     this._log.trace = this._log.trace || debug(`ilp-plugin-ethereum-${role}:trace`)
 
-    // On settle initially and claim on disconnect (by default) if the plugin is a client
     this._settleOnConnect = settleOnConnect
     this._claimOnDisconnect = claimOnDisconnect
 
