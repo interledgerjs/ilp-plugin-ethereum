@@ -1,5 +1,3 @@
-import 'source-map-support/register'
-
 export type Task<T> = () => Promise<T>
 
 export default class Mutex {

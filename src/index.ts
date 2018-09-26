@@ -9,7 +9,6 @@ import { EthereumClientPlugin, EthereumServerPlugin } from './plugin'
 import * as ethUtil from 'ethereumjs-util'
 import * as debug from 'debug'
 import createLogger from 'ilp-logger'
-import 'source-map-support/register'
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 

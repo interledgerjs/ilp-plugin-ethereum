@@ -19,7 +19,6 @@ import {
   isSettling
 } from './utils/contract'
 import Mutex from './utils/queue'
-import 'source-map-support/register'
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 
@@ -619,6 +618,10 @@ export default class EthereumAccount {
 
           // Even if the sender started settling, still accept the claim: we don't mind if they send us more money!
 
+          if (new BigNumber(claim.value).lte(0)) {
+            throw new Error(`value of claim is 0 or negative`)
+          }
+
           const contractAddress = (await getNetwork(this.master._web3)).unidirectional.address
           // @ts-ignore http://web3js.readthedocs.io/en/1.0/web3-utils.html#soliditysha3
           const paymentDigest = Web3.utils.soliditySha3(contractAddress, claim.channelId, claim.value)
@@ -626,10 +629,6 @@ export default class EthereumAccount {
           const isValidSignature = senderAddress === channel.sender
           if (!isValidSignature) {
             throw new Error(`signature is invalid, or sender is using contracts on a different network`)
-          }
-
-          if (new BigNumber(claim.value).lte(0)) {
-            throw new Error(`value of claim is 0 or negative`)
           }
 
           const oldClaimValue = new BigNumber(oldClaim ? oldClaim.value : 0)
