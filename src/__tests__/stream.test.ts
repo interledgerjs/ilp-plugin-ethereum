@@ -6,7 +6,6 @@ import EthereumPlugin = require('..')
 import { convert, Unit } from '../account'
 import BigNumber from 'bignumber.js'
 import test from 'ava'
-import 'source-map-support/register'
 
 test('client streams data and money to server', async t => {
   const web3 = new Web3(process.env.ETHEREUM_PROVIDER)
@@ -50,14 +49,6 @@ test('client streams data and money to server', async t => {
   const INCOMING_FEE = convert('0.00045', Unit.Eth, Unit.Gwei)
   const RECEIVER_MAX_BALANCE = 0
 
-  let actualReceived = new BigNumber(0)
-
-  let serverConn: IlpStream.Connection
-  let serverStream: IlpStream.DataAndMoneyStream
-
-  let clientConn: IlpStream.Connection
-  let clientStream: IlpStream.DataAndMoneyStream
-
   const port = await (getPort() as Promise<number>)
 
   const clientPlugin = new EthereumPlugin({
@@ -92,6 +83,8 @@ test('client streams data and money to server', async t => {
     }
   })
 
+  let actualReceived = new BigNumber(0)
+
   clientPlugin.registerMoneyHandler(Promise.resolve)
   serverPlugin.registerMoneyHandler((amount: string) => {
     actualReceived = actualReceived.plus(amount)
@@ -105,6 +98,10 @@ test('client streams data and money to server', async t => {
     plugin: serverPlugin,
     receiveOnly: true
   })
+
+  let serverStream: IlpStream.DataAndMoneyStream
+  let serverConn: IlpStream.Connection
+  let clientConn: IlpStream.Connection
 
   await new Promise(async resolve => {
     streamServer.once('connection', (conn: IlpStream.Connection) => {
@@ -124,7 +121,7 @@ test('client streams data and money to server', async t => {
       ...(streamServer.generateAddressAndSecret())
     })
 
-    clientStream = clientConn.createStream()
+    const clientStream = clientConn.createStream()
     clientStream.setSendMax(AMOUNT_TO_SEND)
   })
 

@@ -5,7 +5,6 @@ import { convert, Unit } from '../account'
 import { getContract, generateTx } from '../utils/contract'
 import { MemoryStore } from '../utils/store'
 import test from 'ava'
-import 'source-map-support/register'
 
 test(`channel watcher claims settling channel if it's profitable`, async t => {
   t.plan(1)
