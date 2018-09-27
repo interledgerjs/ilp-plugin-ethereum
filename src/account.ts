@@ -379,7 +379,7 @@ export default class EthereumAccount {
 
         if (!receipt.status) {
           this.master._log.error(`Failed to open channel: on-chain transaction reverted by the EVM`)
-          throw settlementBudget
+          return Promise.reject(settlementBudget)
         } else {
           this.master._log.info(`Successfully opened new channel for ${format(value, Unit.Wei)} with account ${this.account.accountName}`)
         }
@@ -413,7 +413,7 @@ export default class EthereumAccount {
 
         if (!receipt.status) {
           this.master._log.error(`Failed to deposit to channel: on-chain transaction reverted by the EVM`)
-          throw settlementBudget
+          return Promise.reject(settlementBudget)
         } else {
           this.master._log.info(`Successfully deposited ${format(value, Unit.Wei)} to channel ${channelId} for account ${this.account.accountName}`)
         }

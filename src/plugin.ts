@@ -103,11 +103,11 @@ export class EthereumServerPlugin extends MiniAccountsPlugin implements PluginIn
     return this._getAccount(from).handleMoney(message, this._moneyHandler)
   }
 
-  _handlePrepareResponse = async (
+  _handlePrepareResponse = (
     destination: string,
     responsePacket: IlpPacket.IlpPacket,
     preparePacket: IlpPacket.IlpPacket
-  ): Promise<void> =>
+  ): void =>
     this._getAccount(destination).handlePrepareResponse(preparePacket, responsePacket)
 
   _close (from: string): Promise<void> {

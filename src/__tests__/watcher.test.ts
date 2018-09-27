@@ -68,10 +68,11 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
   await web3.eth.sendTransaction(tx)
 
   await new Promise(resolve => {
-    setInterval(async () => {
+    const interval = setInterval(async () => {
       const wasClaimed = await contract.methods.isAbsent(channelId).call()
 
       if (wasClaimed) {
+        clearInterval(interval)
         t.pass()
         resolve()
       }
