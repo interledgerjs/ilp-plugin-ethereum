@@ -49,14 +49,14 @@ A connector may charge such a fee to cover the cost of their transaction fee to 
 
 ### `outgoingSettlementPeriod`
 - Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
-- Default: `50400` blocks, or approximately 9 days, assuming 15 second blocks
+- Default: `34560` blocks, or approximately 6 days, assuming 15 second blocks
 - Number of blocks for settlement period when opening new outgoing channels
 
 While the channel is open, the sender may begin the settlement period. If the receiver does not claim the channel before the specified number of blocks elapses and the settling period ends, all the funds can go back to the sender. Settling a channel can be useful if the receiver is unresponsive or excessive collateral is locked up.
 
 ### `minIncomingSettlementPeriod`
 - Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
-- Default: `40320` blocks, or approximately 1 week, assuming 15 second blocks
+- Default: `17280` blocks, or approximately 3 days, assuming 15 second blocks
 - Minimum number of blocks for the settlement period in order to accept an incoming channel
 
 In case the sender starts settling, the receiver may want to allot themselves enough time to claim the channel. Incoming claims from channels with settlement periods below this floor will be rejected outright.

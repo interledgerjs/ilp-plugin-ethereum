@@ -88,12 +88,12 @@ export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
     role = 'client',
     ethereumPrivateKey,
     ethereumProvider = 'wss://mainnet.infura.io/ws',
-    settleOnConnect = role === 'client', // By default, if client, settle initially
-    claimOnDisconnect = role === 'client', // & claim on disconnect
-    incomingChannelFee = 0,
+    settleOnConnect = role === 'client', // By default, if client, settle initially & claim on disconnect
+    claimOnDisconnect = role === 'client',
     outgoingChannelAmount = convert('0.04', Unit.Eth, Unit.Gwei),
-    minIncomingSettlementPeriod = 3 * (24 * 60 * 60) / 15, // ~ 3 days @ 15 sec block time
+    incomingChannelFee = 0,
     outgoingSettlementPeriod = 6 * (24 * 60 * 60) / 15, // ~ 6 days @ 15 sec block time
+    minIncomingSettlementPeriod = 3 * (24 * 60 * 60) / 15, // ~ 3 days @ 15 sec block time
     maxPacketAmount = Infinity,
     balance: {
       maximum = Infinity,
