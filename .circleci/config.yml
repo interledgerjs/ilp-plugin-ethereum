@@ -23,7 +23,7 @@ jobs:
       # lint
       - run: npm run lint
       # upload coverage to codecov.io
-      # - run: npm run codecov
+      - run: npx codecov
       - persist_to_workspace:
           root: ~/repo
           paths: .

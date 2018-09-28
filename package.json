@@ -14,8 +14,7 @@
     "build": "tsc",
     "lint": "tslint --project .",
     "test": "nyc ava",
-    "test-inspect": "node --inspect node_modules/ava/profile.js",
-    "codecov": "codecov"
+    "test-inspect": "node --inspect node_modules/ava/profile.js"
   },
   "repository": {
     "type": "git",
