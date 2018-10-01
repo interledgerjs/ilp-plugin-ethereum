@@ -755,7 +755,7 @@ export default class EthereumAccount {
 
   private startChannelWatcher (): void {
     const interval = this.master._channelWatcherInterval.toNumber()
-    const timer = setInterval(async () => {
+    const timer: NodeJS.Timer = setInterval(async () => {
       try {
         const claim = this.account.bestIncomingClaim
         if (!claim) return
@@ -769,11 +769,14 @@ export default class EthereumAccount {
         this.master._log.trace(`Error while running channel watcher: ${err.message}`)
       }
     }, interval)
+
     // Check if we're in a Node.js environment
+    // tslint:disable-next-line:strict-type-predicates
     if (typeof timer.unref === 'function') {
       // Don't let timer prevent process from exiting
       timer.unref()
     }
+
     this.watcher = timer
   }
 
