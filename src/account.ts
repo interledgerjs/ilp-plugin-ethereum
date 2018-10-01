@@ -241,10 +241,12 @@ export default class EthereumAccount {
    *   simplifies the balance logic (but does require committing the balance first, then refunding)
    */
   async attemptSettle (): Promise<void> {
+    let settlementBudget = new BigNumber(0)
     let amountLeftover = new BigNumber(0)
-    const settleThreshold = this.master._balance.settleThreshold
+
     try {
       // Don't attempt settlement if there's no configured settle threshold ("receive only" mode)
+      const settleThreshold = this.master._balance.settleThreshold
       if (!settleThreshold) {
         return this.master._log.trace('Cannot settle: settle threshold must be configured for automated settlement')
       }
@@ -255,7 +257,7 @@ export default class EthereumAccount {
           `is not below settle threshold of ${format(settleThreshold, Unit.Gwei)}`)
       }
 
-      let settlementBudget = this.master._balance.settleTo.minus(this.account.balance)
+      settlementBudget = this.master._balance.settleTo.minus(this.account.balance)
       if (settlementBudget.lte(0)) {
         // This *should* never happen, since the master constructor verifies that settleTo >= settleThreshold
         return this.master._log.error(`Critical settlement error: settlement threshold triggered, but settle amount of ` +
@@ -291,7 +293,7 @@ export default class EthereumAccount {
         }
       }
 
-      await settle([
+      amountLeftover = await settle([
         // 1) Try to send a claim: spend the channel down entirely before funding it
         b => this.sendClaim(b),
         // 2) Open or deposit to a channel if it's necessary to send anything leftover
@@ -299,9 +301,11 @@ export default class EthereumAccount {
         // 3) Try to send a claim again since we may have more funds in the channel
         b => this.sendClaim(b)
       ], settlementBudget)
-        .catch((err: Error) => this.master._log.error(`Error during settlement: ${err.message}`))
+    } catch (err) {
+      this.master._log.error(`Error during settlement: ${err.message}`)
+    } finally {
+      const amountSettled = settlementBudget.minus(amountLeftover)
 
-      let amountSettled = settlementBudget.minus(amountLeftover)
       if (amountSettled.gt(0)) {
         this.master._log.trace(`Settle attempt complete: spent total of ${format(amountSettled, Unit.Wei)} settling, ` +
           `refunding ${format(amountLeftover, Unit.Wei)} back to balance with ${this.account.accountName}`)
@@ -312,9 +316,7 @@ export default class EthereumAccount {
         this.master._log.error(`Critical settlement error: spent ${format(amountSettled, Unit.Wei)}, ` +
           `more than budget of ${format(settlementBudget, Unit.Wei)} with ${this.account.accountName}`)
       }
-    } catch (err) {
-      this.master._log.error(`Failed to settle: ${err.message}`)
-    } finally {
+
       amountLeftover = convert(amountLeftover, Unit.Wei, Unit.Gwei).dp(0, BigNumber.ROUND_FLOOR)
 
       this.subBalance(amountLeftover)
