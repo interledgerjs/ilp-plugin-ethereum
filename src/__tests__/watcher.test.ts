@@ -9,15 +9,15 @@ import test from 'ava'
 test(`channel watcher claims settling channel if it's profitable`, async t => {
   t.plan(1)
 
-  const web3 = new Web3(process.env.ETHEREUM_PROVIDER)
+  const web3 = new Web3(process.env.ETHEREUM_PROVIDER!)
 
   const port = await (getPort() as Promise<number>)
 
   const clientStore = new MemoryStore()
   const clientPlugin = new EthereumPlugin({
     role: 'client',
-    ethereumPrivateKey: process.env.PRIVATE_KEY_A,
-    ethereumProvider: process.env.ETHEREUM_PROVIDER,
+    ethereumPrivateKey: process.env.PRIVATE_KEY_A!,
+    ethereumProvider: process.env.ETHEREUM_PROVIDER!,
     balance: {
       settleTo: convert('0.01', Unit.Eth, Unit.Gwei),
       settleThreshold: convert('0.000000001', Unit.Eth, Unit.Gwei)
@@ -29,8 +29,8 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
 
   const serverPlugin = new EthereumPlugin({
     role: 'server',
-    ethereumPrivateKey: process.env.PRIVATE_KEY_B,
-    ethereumProvider: process.env.ETHEREUM_PROVIDER,
+    ethereumPrivateKey: process.env.PRIVATE_KEY_B!,
+    ethereumProvider: process.env.ETHEREUM_PROVIDER!,
     channelWatcherInterval: 5000, // Every 5 sec
     // @ts-ignore
     debugHostIldcpInfo: {
