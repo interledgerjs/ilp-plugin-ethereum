@@ -278,21 +278,28 @@ export default class EthereumAccount {
       settlementBudget = convert(settlementBudget, Unit.Gwei, Unit.Wei).dp(0, BigNumber.ROUND_FLOOR)
       this.master._log.trace(`Attempting to settle with account ${this.account.accountName} for maximum of ${format(settlementBudget, Unit.Wei)}`)
 
-      try {
-        // 1) Try to send a claim: spend the channel down entirely before funding it
-        amountLeftover = await this.sendClaim(settlementBudget)
-        // 2) Open or deposit to a channel if it's necessary to send anything leftover
-        if (amountLeftover.lte(0)) throw amountLeftover
-        amountLeftover = await this.fundOutgoingChannel(amountLeftover)
-        // 3) Try to send a claim again since we may have more funds in the channel
-        if (amountLeftover.lte(0)) throw amountLeftover
-        amountLeftover = await this.sendClaim(amountLeftover)
-      } catch (leftover) {
-        // If no money was sent, rejections should return the original amount
-        if (BigNumber.isBigNumber(leftover)) {
-          amountLeftover = leftover
+      // Run each settle task sequentially, spending down from the budget
+      const settle = async (
+        tasks: ((budget: BigNumber) => Promise<BigNumber>)[],
+        budget: BigNumber
+      ): Promise<BigNumber> => {
+        if (tasks.length === 0 || budget.lte(0)) {
+          return budget
+        } else {
+          const amountLeftover = await tasks[0](budget)
+          return settle(tasks.slice(1), amountLeftover)
         }
       }
+
+      await settle([
+        // 1) Try to send a claim: spend the channel down entirely before funding it
+        b => this.sendClaim(b),
+        // 2) Open or deposit to a channel if it's necessary to send anything leftover
+        b => this.fundOutgoingChannel(b),
+        // 3) Try to send a claim again since we may have more funds in the channel
+        b => this.sendClaim(b)
+      ], settlementBudget)
+        .catch((err: Error) => this.master._log.error(`Error during settlement: ${err.message}`))
 
       let amountSettled = settlementBudget.minus(amountLeftover)
       if (amountSettled.gt(0)) {
@@ -350,7 +357,7 @@ export default class EthereumAccount {
         await this.fetchEthereumAddress()
         if (!this.account.ethereumAddress) {
           this.master._log.trace(`Failed to open channel: no Ethereum address is linked to account ${this.account.accountName}`)
-          return Promise.reject(settlementBudget)
+          return settlementBudget
         }
 
         const contract = await getContract(this.master._web3)
@@ -367,8 +374,7 @@ export default class EthereumAccount {
           this.master._log.trace(`Insufficient funds to open a new channel: fee of ${format(txFee, Unit.Wei)} ` +
             `is greater than maximum amount to settle of ${format(settlementBudget, Unit.Wei)}`)
           // Return original amount before deducting tx fee, since transaction will never be sent
-          // Reject the promise, since we shouldn't try to send a claim after this
-          return Promise.reject(settlementBudget)
+          return settlementBudget
         }
         settlementBudget = settlementBudget.minus(txFee)
 
@@ -379,7 +385,7 @@ export default class EthereumAccount {
 
         if (!receipt.status) {
           this.master._log.error(`Failed to open channel: on-chain transaction reverted by the EVM`)
-          return Promise.reject(settlementBudget)
+          return settlementBudget
         } else {
           this.master._log.info(`Successfully opened new channel for ${format(value, Unit.Wei)} with account ${this.account.accountName}`)
         }
@@ -401,8 +407,7 @@ export default class EthereumAccount {
           this.master._log.trace(`Insufficient funds to deposit to channel: fee of ${format(txFee, Unit.Wei)} ` +
           `is greater than maximum amount to settle of ${format(settlementBudget, Unit.Wei)}`)
           // Return original amount before deducting tx fee, since transaction will never be sent
-          // Reject the promise, since we shouldn't try to send a claim after this
-          return Promise.reject(settlementBudget)
+          return settlementBudget
         }
         settlementBudget = settlementBudget.minus(txFee)
 
@@ -413,18 +418,16 @@ export default class EthereumAccount {
 
         if (!receipt.status) {
           this.master._log.error(`Failed to deposit to channel: on-chain transaction reverted by the EVM`)
-          return Promise.reject(settlementBudget)
         } else {
           this.master._log.info(`Successfully deposited ${format(value, Unit.Wei)} to channel ${channelId} for account ${this.account.accountName}`)
         }
       } else {
         this.master._log.trace(`No on-chain funding transaction required to settle ${format(settlementBudget, Unit.Wei)} with account ${this.account.accountName}`)
       }
-
-      return settlementBudget
     } catch (err) {
       this.master._log.error(`Failed to fund outgoing channel to ${this.account.accountName}: ${err.message}`)
-      throw settlementBudget
+    } finally {
+      return settlementBudget
     }
   }
 
@@ -448,14 +451,14 @@ export default class EthereumAccount {
       const spent = new BigNumber(this.account.bestOutgoingClaim ? this.account.bestOutgoingClaim.value : 0)
       const remainingInChannel = channel.value.minus(spent)
 
+      // Ensure the claim increment is always > 0
       if (remainingInChannel.lte(0)) {
         this.master._log.trace(`Cannot send claim to ${this.account.accountName}: no remaining funds in outgoing channel`)
         return settlementBudget
       }
-
       if (settlementBudget.lte(0)) {
         this.master._log.trace(`Cannot send claim to ${this.account.accountName}: no remaining settlement budget`)
-        return Promise.reject(settlementBudget)
+        return settlementBudget
       }
 
       // Ensures that the increment is greater than the previous claim
@@ -498,11 +501,10 @@ export default class EthereumAccount {
         // In any case, this isn't particularly important/actionable
         this.master._log.trace(`Error while sending claim to peer: ${err.message}`)
       })
-
-      return settlementBudget
     } catch (err) {
       this.master._log.error(`Failed to send claim to ${this.account.accountName}: ${err.message}`)
-      throw settlementBudget
+    } finally {
+      return settlementBudget
     }
   }
 
@@ -775,7 +777,7 @@ export default class EthereumAccount {
     this.watcher = timer
   }
 
-  private claimIfProfitable (requireSettling = false): Promise<void> {
+  public claimIfProfitable (requireSettling = false): Promise<void> {
     return this.claimTransaction.runExclusive(async () => {
       try {
         const claim = this.account.bestIncomingClaim
