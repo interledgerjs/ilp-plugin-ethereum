@@ -29,8 +29,11 @@
     "machinomy",
     "erc20"
   ],
-  "author": "Interledger Team",
-  "license": "ISC",
+  "contributors": [
+    "Kincaid O'Neil <kincaid@kava.io> (https://kincaidoneil.com/)",
+    "Kevin Davis <kevin@kava.io>"
+  ],
+  "license": "Apache-2.0",
   "bugs": {
     "url": "https://github.com/interledgerjs/ilp-plugin-ethereum/issues"
   },
