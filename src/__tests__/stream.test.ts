@@ -132,7 +132,9 @@ test('client streams data and money to server', async t => {
     t.true(amountPrefunded.lte(SENDER_MAX_PREFUND), 'amount prefunded to server is never greater than settleTo amount')
   })
 
-  await t.notThrowsAsync(serverStream!.receiveTotal(AMOUNT_TO_SEND), 'client streamed the total amount of packets to the server')
+  await t.notThrowsAsync(serverStream!.receiveTotal(AMOUNT_TO_SEND, {
+    timeout: 360000
+  }), 'client streamed the total amount of packets to the server')
 
   // Wait 10 seconds for sender to finish sending the remaining payment channel claims
   await new Promise(resolve => {
