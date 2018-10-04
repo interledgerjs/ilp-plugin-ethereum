@@ -45,8 +45,8 @@ test('client streams data and money to server', async t => {
   }
 
   const AMOUNT_TO_SEND = convert('0.0023', Unit.Eth, Unit.Gwei)
-  const SENDER_SETTLE_TO = convert('0.002', Unit.Eth, Unit.Gwei)
-  const INCOMING_FEE = convert('0.00045', Unit.Eth, Unit.Gwei)
+  const SENDER_MAX_PREFUND = convert('0.001', Unit.Eth, Unit.Gwei)
+  const INCOMING_FEE = convert('0.00018', Unit.Eth, Unit.Gwei)
   const RECEIVER_MAX_BALANCE = 0
 
   const port = await (getPort() as Promise<number>)
@@ -57,10 +57,11 @@ test('client streams data and money to server', async t => {
     ethereumProvider: process.env.ETHEREUM_PROVIDER!,
     // @ts-ignore
     server: `btp+ws://userA:secretA@localhost:${port}`,
-    outgoingChannelAmount: convert('0.01', Unit.Eth, Unit.Gwei),
+    outgoingChannelAmount: convert('0.002', Unit.Eth, Unit.Gwei),
     balance: {
-      settleTo: SENDER_SETTLE_TO,
-      settleThreshold: convert('0.0019', Unit.Eth, Unit.Gwei)
+      maximum: SENDER_MAX_PREFUND,
+      settleTo: SENDER_MAX_PREFUND,
+      settleThreshold: SENDER_MAX_PREFUND
     }
   })
 
@@ -76,7 +77,6 @@ test('client streams data and money to server', async t => {
     },
     port,
     maxPacketAmount: convert('0.0001', Unit.Eth, Unit.Gwei),
-    outgoingChannelAmount: convert('0.01', Unit.Eth, Unit.Gwei),
     incomingChannelFee: INCOMING_FEE,
     balance: {
       maximum: RECEIVER_MAX_BALANCE
@@ -129,7 +129,7 @@ test('client streams data and money to server', async t => {
     const amountPrefunded = actualReceived.minus(serverConn.totalReceived)
 
     t.true(amountPrefunded.gte(RECEIVER_MAX_BALANCE), 'amount prefunded to server is always at least the max balance')
-    t.true(amountPrefunded.lte(SENDER_SETTLE_TO), 'amount prefunded to server is never greater than settleTo amount')
+    t.true(amountPrefunded.lte(SENDER_MAX_PREFUND), 'amount prefunded to server is never greater than settleTo amount')
   })
 
   await t.notThrowsAsync(serverStream!.receiveTotal(AMOUNT_TO_SEND), 'client streamed the total amount of packets to the server')
