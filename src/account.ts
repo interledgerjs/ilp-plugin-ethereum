@@ -1,4 +1,5 @@
 import Web3 = require('web3')
+import { TransactionReceipt } from 'web3/types'
 const BtpPacket = require('btp-packet')
 import BigNumber from 'bignumber.js'
 import { DataHandler, MoneyHandler } from './utils/types'
@@ -126,6 +127,18 @@ export default class EthereumAccount {
     this.account.balance = newBalance
   }
 
+  private async updateChannel (channelId: string): Promise<Channel | undefined> {
+    const channel = await fetchChannel(this.master._web3, channelId)
+
+    if (!channel) {
+      this.master._channels.delete(channelId)
+    } else {
+      this.master._channels.set(channelId, channel)
+    }
+
+    return this.master._channels.get(channelId)
+  }
+
   async connect () {
     const accountKey = `${this.account.accountName}:account`
     await this.master._store.loadObject(accountKey)
@@ -154,6 +167,19 @@ export default class EthereumAccount {
         return Reflect.set(account, key, val)
       }
     })
+
+    // Fetch the state of the incoming channel
+    const incomingChannelId = this.account.bestIncomingClaim &&
+      this.account.bestIncomingClaim.channelId
+    if (incomingChannelId) {
+      await this.updateChannel(incomingChannelId)
+    }
+
+    // Fetch the state of the outgoing channel
+    const outgoingChannelId = this.account.outgoingChannelId
+    if (outgoingChannelId) {
+      await this.updateChannel(outgoingChannelId)
+    }
 
     this.startChannelWatcher()
 
@@ -329,10 +355,10 @@ export default class EthereumAccount {
       // Determine if an on-chain funding transaction needs to occur
       let requiresNewChannel = false
       let requiresDeposit = false
-      let channel: Channel | null
+      let channel: Channel | undefined
       if (typeof this.account.outgoingChannelId === 'string') {
         // Update channel details and fetch latest state
-        channel = await fetchChannel(this.master._web3, this.account.outgoingChannelId)
+        channel = await this.updateChannel(this.account.outgoingChannelId)
         if (!channel) {
           // Channel doesn't exist (or is settled), so attempt to create a new one
           requiresNewChannel = true
@@ -381,19 +407,35 @@ export default class EthereumAccount {
         settlementBudget = settlementBudget.minus(txFee)
 
         this.master._log.trace(`Opening channel for ${format(value, Unit.Wei)} and fee of ${format(txFee, Unit.Wei)} with ${this.account.accountName}`)
+        const emitter = this.master._web3.eth.sendTransaction(tx)
 
-        // For safety, if the tx is reverted, wasn't mined, or less gas was used, DO NOT credit the client's account
-        const receipt = await this.master._web3.eth.sendTransaction(tx)
+        let confHandler: (confNumber: number, receipt: TransactionReceipt) => void
+        let errorHandler: (err: Error) => void
 
-        if (!receipt.status) {
-          this.master._log.error(`Failed to open channel: on-chain transaction reverted by the EVM`)
-          return settlementBudget
-        } else {
-          this.master._log.info(`Successfully opened new channel for ${format(value, Unit.Wei)} with account ${this.account.accountName}`)
-        }
+        await new Promise(resolve => {
+          confHandler = (confNumber: number, receipt: TransactionReceipt) => {
+            if (!receipt.status) {
+              this.master._log.error(`Failed to open channel: on-chain transaction reverted by the EVM`)
+              resolve()
+            } else if (confNumber >= 1) {
+              this.master._log.info(`Successfully opened new channel for ${format(value, Unit.Wei)} with account ${this.account.accountName}`)
+              this.account.outgoingChannelId = channelId
+              this.master._log.trace(`Outgoing channel ${channelId} is now linked to account ${this.account.accountName}`)
+              resolve()
+            }
+          }
 
-        this.account.outgoingChannelId = channelId
-        this.master._log.trace(`Outgoing channel ${channelId} is now linked to account ${this.account.accountName}`)
+          errorHandler = (err: Error) => {
+            // For safety, if the tx is reverted, wasn't mined, or less gas was used, DO NOT credit the client's account
+            this.master._log.error(`Failed to open channel: ${err.message}`)
+            resolve()
+          }
+
+          emitter.on('confirmation', confHandler).on('error', errorHandler)
+        })
+
+        // @ts-ignore -- DefinitelyTyped is incorrect
+        emitter.off('confirmation', confHandler).off('error', errorHandler)
       } else if (requiresDeposit) {
         const contract = await getContract(this.master._web3)
         const channelId = this.account.outgoingChannelId!
@@ -414,15 +456,33 @@ export default class EthereumAccount {
         settlementBudget = settlementBudget.minus(txFee)
 
         this.master._log.trace(`Depositing ${format(txFee, Unit.Wei)} to channel for fee of ${format(txFee, Unit.Wei)} with account ${this.account.accountName}`)
+        const emitter = this.master._web3.eth.sendTransaction(tx)
 
-        // For safety, if the tx is reverted, wasn't mined, or less gas was used, DO NOT credit the client's account
-        const receipt = await this.master._web3.eth.sendTransaction(tx)
+        let confHandler: (confNumber: number, receipt: TransactionReceipt) => void
+        let errorHandler: (err: Error) => void
 
-        if (!receipt.status) {
-          this.master._log.error(`Failed to deposit to channel: on-chain transaction reverted by the EVM`)
-        } else {
-          this.master._log.info(`Successfully deposited ${format(value, Unit.Wei)} to channel ${channelId} for account ${this.account.accountName}`)
-        }
+        await new Promise(resolve => {
+          confHandler = (confNumber: number, receipt: TransactionReceipt) => {
+            if (!receipt.status) {
+              this.master._log.error(`Failed to deposit to channel: on-chain transaction reverted by the EVM`)
+              resolve()
+            } else if (confNumber >= 1) {
+              this.master._log.info(`Successfully deposited ${format(value, Unit.Wei)} to channel ${channelId} for account ${this.account.accountName}`)
+              resolve()
+            }
+          }
+
+          errorHandler = (err: Error) => {
+            // For safety, if the tx is reverted, wasn't mined, or less gas was used, DO NOT credit the client's account
+            this.master._log.error(`Failed to open channel: ${err.message}`)
+            resolve()
+          }
+
+          emitter.on('confirmation', confHandler).on('error', errorHandler)
+        })
+
+        // @ts-ignore -- DefinitelyTyped is incorrect
+        emitter.off('confirmation', confHandler).off('error', errorHandler)
       } else {
         this.master._log.trace(`No on-chain funding transaction required to settle ${format(settlementBudget, Unit.Wei)} with account ${this.account.accountName}`)
       }
@@ -440,7 +500,14 @@ export default class EthereumAccount {
         return settlementBudget
       }
 
-      const channel = await fetchChannel(this.master._web3, this.account.outgoingChannelId)
+      let channel = this.master._channels.get(this.account.outgoingChannelId)
+
+      // If the channel doesn't exist, try fetching state from network
+      if (!channel) {
+        channel = await this.updateChannel(this.account.outgoingChannelId)
+      }
+
+      // If the channel still doesn't exist, that's not good
       if (!channel) {
         this.master._log.trace(`Cannot send claim to ${this.account.accountName}: linked channel doesn't exist or is settled`)
         return settlementBudget
@@ -614,8 +681,17 @@ export default class EthereumAccount {
             throw new Error(`account ${this.account.accountName} must use channel ${oldClaim.channelId}`)
           }
 
-          // Always fetch updated channel state from network
-          const channel = await fetchChannel(this.master._web3, claim.channelId)
+          let channel = this.master._channels.get(claim.channelId)
+          // Fetch channel state from network if:
+          // 1) No claim/channel is linked to the account
+          // 2) The channel isn't cached
+          // 3) Claim value is greater than cached channel value (e.g. possible on-chain deposit)
+          const shouldFetchChannel = !oldClaim || !channel
+            || new BigNumber(claim.value).gt(channel.value)
+          if (shouldFetchChannel) {
+            channel = await this.updateChannel(claim.channelId)
+          }
+
           if (!channel) {
             throw new Error(`channel is already settled or doesn't exist`)
           }
@@ -762,7 +838,7 @@ export default class EthereumAccount {
         const claim = this.account.bestIncomingClaim
         if (!claim) return
 
-        const channel = await fetchChannel(this.master._web3, claim.channelId)
+        const channel = await this.updateChannel(claim.channelId)
 
         if (channel && isSettling(channel)) {
           await this.claimIfProfitable(true)
@@ -788,7 +864,7 @@ export default class EthereumAccount {
         const claim = this.account.bestIncomingClaim
         if (!claim) return
 
-        const channel = await fetchChannel(this.master._web3, claim.channelId)
+        const channel = await this.updateChannel(claim.channelId)
         if (!channel) {
           return this.master._log.trace(`Cannot claim channel ${claim.channelId} with ${this.account.accountName}: linked channel doesn't exist or is settled`)
         }

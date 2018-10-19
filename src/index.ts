@@ -4,6 +4,7 @@ import { Logger, PluginInstance, DataHandler, MoneyHandler } from './utils/types
 import Web3 = require('web3')
 import { Provider } from 'web3/providers'
 import BigNumber from 'bignumber.js'
+import { Channel } from './utils/contract'
 import { convert, Unit } from './account'
 import { EthereumClientPlugin, EthereumServerPlugin } from './plugin'
 import * as ethUtil from 'ethereumjs-util'
@@ -80,6 +81,7 @@ export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
     settleThreshold?: BigNumber
     minimum: BigNumber
   }
+  readonly _channels: Map<string, Channel> = new Map() // channelId -> cached channel
   readonly _channelWatcherInterval: BigNumber // ms
   readonly _store: any // Resolves incompatiblities with the older ilp-store-wrapper used by mini-accounts
   readonly _log: Logger
