@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "prepublish": "npm run build",
+    "prepare": "npm run build",
     "lint": "tslint --project .",
     "test": "nyc ava",
     "test-inspect": "node --inspect node_modules/ava/profile.js"
