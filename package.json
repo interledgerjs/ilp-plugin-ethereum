@@ -11,7 +11,7 @@
     "build/**/*"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc || true",
     "prepare": "npm run build",
     "lint": "tslint --project .",
     "test": "nyc ava",
@@ -59,7 +59,7 @@
     "ava": "^1.0.0-rc.1",
     "codecov": "^3.1.0",
     "get-port": "^4.0.0",
-    "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#ko-receive-only",
+    "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#ko-receive-only-tests",
     "nyc": "^13.0.1",
     "standard": "^11.0.1",
     "ts-node": "^7.0.1",
