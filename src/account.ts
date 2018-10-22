@@ -306,27 +306,21 @@ export default class EthereumAccount {
       settlementBudget = convert(settlementBudget, Unit.Gwei, Unit.Wei).dp(0, BigNumber.ROUND_FLOOR)
       this.master._log.trace(`Attempting to settle with account ${this.account.accountName} for maximum of ${format(settlementBudget, Unit.Wei)}`)
 
-      // Run each settle task sequentially, spending down from the budget
-      const settle = async (
-        tasks: ((budget: BigNumber) => Promise<BigNumber>)[],
-        budget: BigNumber
-      ): Promise<BigNumber> => {
-        if (tasks.length === 0 || budget.lte(0)) {
-          return budget
-        } else {
-          const amountLeftover = await tasks[0](budget)
-          return settle(tasks.slice(1), amountLeftover)
-        }
-      }
-
-      amountLeftover = await settle([
+      type SettleTask = (budget: BigNumber) => Promise<BigNumber>
+      const tasks: SettleTask[] = [
         // 1) Try to send a claim: spend the channel down entirely before funding it
         b => this.sendClaim(b),
         // 2) Open or deposit to a channel if it's necessary to send anything leftover
         b => this.fundOutgoingChannel(b),
         // 3) Try to send a claim again since we may have more funds in the channel
         b => this.sendClaim(b)
-      ], settlementBudget)
+      ]
+
+      // Run each settle task sequentially, spending down from the budget
+      amountLeftover = await tasks.reduce(async (leftover: Promise<BigNumber>, task: SettleTask) => {
+        const budget = await leftover
+        return budget.lte(0) ? budget : task(budget)
+      }, Promise.resolve(settlementBudget))
     } catch (err) {
       this.master._log.error(`Error during settlement: ${err.message}`)
     } finally {
