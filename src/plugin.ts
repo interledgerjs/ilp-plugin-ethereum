@@ -2,15 +2,15 @@ import EthereumPlugin = require('.')
 import EthereumAccount, { requestId } from './account'
 import BtpPlugin, { BtpPacket, BtpSubProtocol } from 'ilp-plugin-btp'
 import MiniAccountsPlugin from 'ilp-plugin-mini-accounts'
-import { PluginInstance } from './utils/types'
+import { PluginInstance, PluginServices } from './utils/types'
 import * as IlpPacket from 'ilp-packet'
 const BtpPacket = require('btp-packet')
 
 export class EthereumClientPlugin extends BtpPlugin implements PluginInstance {
   private _account: EthereumAccount
 
-  constructor (opts: any) {
-    super(opts)
+  constructor (opts: any, api: PluginServices) {
+    super(opts, api)
 
     this._account = new EthereumAccount({
       master: opts.master,
@@ -67,8 +67,8 @@ export class EthereumServerPlugin extends MiniAccountsPlugin implements PluginIn
   private _accounts: Map<string, EthereumAccount> // accountName -> account
   private _master: EthereumPlugin
 
-  constructor (opts: any) {
-    super(opts)
+  constructor (opts: any, api: PluginServices) {
+    super(opts, api)
 
     this._master = opts.master
     this._accounts = new Map()

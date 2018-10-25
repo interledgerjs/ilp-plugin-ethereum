@@ -1,6 +1,6 @@
 import { EventEmitter2 } from 'eventemitter2'
-import { StoreWrapper } from './utils/store'
-import { Logger, PluginInstance, DataHandler, MoneyHandler } from './utils/types'
+import { StoreWrapper, MemoryStore } from './utils/store'
+import { Logger, PluginInstance, DataHandler, MoneyHandler, PluginServices } from './utils/types'
 import Web3 = require('web3')
 import { Provider } from 'web3/providers'
 import BigNumber from 'bignumber.js'
@@ -57,8 +57,6 @@ interface EthereumPluginOpts {
     minimum?: BigNumber.Value
   },
   channelWatcherInterval?: BigNumber.Value
-  _store?: any // resolves incompatiblities with the older ilp-store-wrapper used by mini-accounts
-  _log?: Logger
 }
 
 export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
@@ -83,7 +81,7 @@ export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
   }
   readonly _channels: Map<string, Channel> = new Map() // channelId -> cached channel
   readonly _channelWatcherInterval: BigNumber // ms
-  readonly _store: any // Resolves incompatiblities with the older ilp-store-wrapper used by mini-accounts
+  readonly _store: StoreWrapper
   readonly _log: Logger
 
   constructor ({
@@ -108,7 +106,10 @@ export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
       new BigNumber(minIncomingSettlementPeriod).times(15).div(1000),
     // All remaining params are passed to mini-accounts/plugin-btp
     ...opts
-  }: EthereumPluginOpts) {
+  }: EthereumPluginOpts, {
+    log,
+    store = new MemoryStore()
+  }: PluginServices = {}) {
     super()
 
     // Web3 errors are unclear if no key was provided
@@ -131,9 +132,9 @@ export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
 
     this._role = role
 
-    this._store = new StoreWrapper(opts._store)
+    this._store = new StoreWrapper(store)
 
-    this._log = opts._log || createLogger(`ilp-plugin-ethereum-${role}`)
+    this._log = log || createLogger(`ilp-plugin-ethereum-${role}`)
     this._log.trace = this._log.trace || debug(`ilp-plugin-ethereum-${role}:trace`)
 
     this._settleOnConnect = settleOnConnect
@@ -196,7 +197,7 @@ export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
     this._plugin = new InternalPlugin({
       ...opts,
       master: this
-    })
+    }, { store, log })
 
     this._plugin.on('connect', () => this.emitAsync('connect'))
     this._plugin.on('disconnect', () => this.emitAsync('disconnect'))

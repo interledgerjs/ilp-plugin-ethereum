@@ -22,9 +22,10 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
       settleTo: convert('0.01', Unit.Eth, Unit.Gwei),
       settleThreshold: convert('0.000000001', Unit.Eth, Unit.Gwei)
     },
-    _store: clientStore,
     // @ts-ignore
     server: `btp+ws://userA:secretA@localhost:${port}`
+  }, {
+    store: clientStore
   })
 
   const serverPlugin = new EthereumPlugin({

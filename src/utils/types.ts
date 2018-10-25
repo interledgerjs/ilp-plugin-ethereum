@@ -1,4 +1,5 @@
 import { EventEmitter2 } from 'eventemitter2'
+import { Store } from './store'
 
 export interface Logger {
   info (...msg: any[]): void
@@ -28,4 +29,9 @@ export interface PluginInstance extends EventEmitter2 {
   deregisterMoneyHandler (): void
   getAdminInfo? (): Promise<object>
   sendAdminInfo? (info: object): Promise<object>
+}
+
+export interface PluginServices {
+  log?: Logger
+  store?: Store
 }

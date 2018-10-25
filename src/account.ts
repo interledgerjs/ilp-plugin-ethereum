@@ -142,7 +142,7 @@ export default class EthereumAccount {
   async connect () {
     const accountKey = `${this.account.accountName}:account`
     await this.master._store.loadObject(accountKey)
-    const savedAccount = this.master._store.getObject(accountKey) || {}
+    const savedAccount: any = this.master._store.getObject(accountKey) || {}
 
     // Parse balances, since they're non-primitives
     // (otherwise the defaults from the constructor are used)
