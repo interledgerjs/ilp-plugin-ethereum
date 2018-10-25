@@ -430,6 +430,9 @@ export default class EthereumAccount {
 
         // @ts-ignore -- DefinitelyTyped is incorrect
         emitter.off('confirmation', confHandler).off('error', errorHandler)
+
+        // Wait 2 seconds for block to propagate
+        await new Promise(resolve => setTimeout(resolve, 2000))
       } else if (requiresDeposit) {
         const contract = await getContract(this.master._web3)
         const channelId = this.account.outgoingChannelId!
@@ -477,6 +480,9 @@ export default class EthereumAccount {
 
         // @ts-ignore -- DefinitelyTyped is incorrect
         emitter.off('confirmation', confHandler).off('error', errorHandler)
+
+        // Wait 2 seconds for block to propagate
+        await new Promise(resolve => setTimeout(resolve, 2000))
       } else {
         this.master._log.trace(`No on-chain funding transaction required to settle ${format(settlementBudget, Unit.Wei)} with account ${this.account.accountName}`)
       }
