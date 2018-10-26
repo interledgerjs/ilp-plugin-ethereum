@@ -16,7 +16,21 @@ export class EthereumClientPlugin extends BtpPlugin implements PluginInstance {
       master: opts.master,
       accountName: 'server',
       sendMessage: (message: BtpPacket) =>
-        this._call('', message)
+        this._call('', message),
+      dataHandler: (data: Buffer) => {
+        if (typeof this._dataHandler !== 'function') {
+          throw new Error('no request handler registered')
+        }
+
+        return this._dataHandler(data)
+      },
+      moneyHandler: (amount: string) => {
+        if (typeof this._moneyHandler !== 'function') {
+          throw new Error('no money handler registered')
+        }
+
+        return this._moneyHandler(amount)
+      }
     })
   }
 
@@ -25,11 +39,11 @@ export class EthereumClientPlugin extends BtpPlugin implements PluginInstance {
   }
 
   _handleData (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> {
-    return this._account.handleData(message, this._dataHandler)
+    return this._account.handleData(message)
   }
 
   _handleMoney (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> {
-    return this._account.handleMoney(message, this._moneyHandler)
+    return this._account.handleMoney(message)
   }
 
   // Add hooks into sendData before and after sending a packet for balance updates and settlement, akin to mini-accounts
@@ -83,7 +97,21 @@ export class EthereumServerPlugin extends MiniAccountsPlugin implements PluginIn
         accountName,
         master: this._master,
         sendMessage: (message: BtpPacket) =>
-          this._call(address, message)
+          this._call(address, message),
+        dataHandler: (data: Buffer) => {
+          if (typeof this._dataHandler !== 'function') {
+            throw new Error('no request handler registered')
+          }
+
+          return this._dataHandler(data)
+        },
+        moneyHandler: (amount: string) => {
+          if (typeof this._moneyHandler !== 'function') {
+            throw new Error('no money handler registered')
+          }
+
+          return this._moneyHandler(amount)
+        }
       })
 
       this._accounts.set(accountName, account)
@@ -97,10 +125,10 @@ export class EthereumServerPlugin extends MiniAccountsPlugin implements PluginIn
   }
 
   _handleCustomData = async (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> =>
-    this._getAccount(from).handleData(message, this._dataHandler)
+    this._getAccount(from).handleData(message)
 
   _handleMoney (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> {
-    return this._getAccount(from).handleMoney(message, this._moneyHandler)
+    return this._getAccount(from).handleMoney(message)
   }
 
   _handlePrepareResponse = (

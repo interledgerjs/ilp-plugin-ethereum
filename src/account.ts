@@ -64,6 +64,10 @@ export default class EthereumAccount {
   private master: EthereumPlugin
   // Send the given BTP packet message to this counterparty
   private sendMessage: (message: BtpPacket) => Promise<BtpPacketData>
+  // Data handler mapped from plugin
+  private dataHandler: DataHandler
+  // Money handler mapped from plugin
+  private moneyHandler: MoneyHandler
   // Queue to handle all incoming settlements/BTP transfers
   private incomingSettlements = new Mutex()
   // Queue to handle all outgoing settlements
@@ -78,10 +82,14 @@ export default class EthereumAccount {
     accountName: string,
     master: EthereumPlugin,
     // Wrap _call/expose method to send WS messages
-    sendMessage: (message: BtpPacket) => Promise<BtpPacketData>
+    sendMessage: (message: BtpPacket) => Promise<BtpPacketData>,
+    dataHandler: DataHandler,
+    moneyHandler: MoneyHandler
   }) {
     this.master = opts.master
     this.sendMessage = opts.sendMessage
+    this.dataHandler = opts.dataHandler
+    this.moneyHandler = opts.moneyHandler
 
     // No change detection until after `connect` is called
     this.account = {
@@ -577,7 +585,7 @@ export default class EthereumAccount {
     }
   }
 
-  async handleData (message: BtpPacket, dataHandler?: DataHandler): Promise<BtpSubProtocol[]> {
+  async handleData (message: BtpPacket): Promise<BtpSubProtocol[]> {
     const info = getSubprotocol(message, 'info')
     const ilp = getSubprotocol(message, 'ilp')
 
@@ -608,10 +616,6 @@ export default class EthereumAccount {
           })
         }
 
-        if (typeof dataHandler !== 'function') {
-          throw new Error('no request handler registered')
-        }
-
         try {
           this.addBalance(amountBN)
         } catch (err) {
@@ -635,7 +639,7 @@ export default class EthereumAccount {
             }, expiresAt.getTime() - Date.now())
           }),
           // Forward the packet to data handler, wait for response
-          dataHandler(ilp.data)
+          this.dataHandler(ilp.data)
         ])
         // tslint:disable-next-line:no-unnecessary-type-assertion
         clearTimeout(timer!)
@@ -655,7 +659,7 @@ export default class EthereumAccount {
     return []
   }
 
-  async handleMoney (message: BtpPacket, moneyHandler?: MoneyHandler): Promise<BtpSubProtocol[]> {
+  async handleMoney (message: BtpPacket): Promise<BtpSubProtocol[]> {
     return this.incomingSettlements.runExclusive(async () => {
       try {
         const machinomy = getSubprotocol(message, 'machinomy')
@@ -782,11 +786,7 @@ export default class EthereumAccount {
           const amount = convert(claimIncrement, Unit.Wei, Unit.Gwei).dp(0, BigNumber.ROUND_DOWN)
           this.subBalance(amount)
 
-          if (typeof moneyHandler !== 'function') {
-            throw new Error('no money handler registered')
-          }
-
-          await moneyHandler(amount.toString())
+          await this.moneyHandler(amount.toString())
         } else {
           throw new Error(`BTP TRANSFER packet did not include any 'machinomy' subprotocol data`)
         }
