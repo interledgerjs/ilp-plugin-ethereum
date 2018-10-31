@@ -4,23 +4,17 @@
     "outDir": "./build",
     "target": "es2017",
     "module": "commonjs",
-    "sourceMap": true,
-    "inlineSources": true,
-    "declaration": true,
-    "noImplicitAny": true,
-    "removeComments": true,
     "moduleResolution": "node",
-    "strictNullChecks": true,
-    "suppressImplicitAnyIndexErrors": true,
-    "alwaysStrict": true,
-    "resolveJsonModule": true
+    "sourceMap": true,
+    "declaration": true,
+    "removeComments": true,
+    "strict": true /* Enable all strict type-checking options. */,
+    "resolveJsonModule": true,
   },
   "include": [
-    "src/**/*"
+    "src"
   ],
   "exclude": [
-    "src/__tests__/**/*",
-    "**/*.test.ts",
-    "**/*.spec.ts",
+    "src/__tests__"
   ]
 }

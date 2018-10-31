@@ -57,13 +57,13 @@ export class StoreWrapper {
 
   get (key: string): string | void {
     const val = this._cache.get(key)
-    if (val === undefined || typeof val === 'string') return val
+    if (typeof val === 'undefined' || typeof val === 'string') return val
     throw new Error('StoreWrapper#get: unexpected type for key=' + key)
   }
 
   getObject (key: string): object | void {
     const val = this._cache.get(key)
-    if (val === undefined || typeof val === 'object') return val
+    if (typeof val === 'undefined' || typeof val === 'object') return val
     throw new Error('StoreWrapper#getObject: unexpected type for key=' + key)
   }
 

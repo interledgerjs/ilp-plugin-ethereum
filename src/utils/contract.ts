@@ -7,7 +7,9 @@ import { promisify } from 'util'
 import * as UNIDIRECTIONAL_MAINNET from '../abi/Unidirectional-mainnet.json'
 import * as UNIDIRECTIONAL_TESTNET from '../abi/Unidirectional-testnet.json'
 
-const NETWORKS = {
+const NETWORKS: {
+  [index: number]: Network
+} = {
   // Mainnet
   1: {
     unidirectional: {

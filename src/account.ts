@@ -4,7 +4,6 @@ const BtpPacket = require('btp-packet')
 import BigNumber from 'bignumber.js'
 import { DataHandler, MoneyHandler } from './utils/types'
 import { BtpPacket, BtpPacketData, BtpSubProtocol } from 'ilp-plugin-btp'
-import { ilpAndCustomToProtocolData } from 'ilp-plugin-btp/src/protocol-data-converter'
 import * as IlpPacket from 'ilp-packet'
 import EthereumPlugin = require('.')
 import { randomBytes } from 'crypto'
@@ -650,9 +649,17 @@ export default class EthereumAccount {
           this.master._log.trace(`Received FULFILL from data handler in response to forwarded PREPARE`)
         }
 
-        return ilpAndCustomToProtocolData({ ilp: response })
+        return [{
+          protocolName: 'ilp',
+          contentType: BtpPacket.MIME_APPLICATION_OCTET_STREAM,
+          data: response
+        }]
       } catch (err) {
-        return ilpAndCustomToProtocolData({ ilp: IlpPacket.errorToReject('', err) })
+        return [{
+          protocolName: 'ilp',
+          contentType: BtpPacket.MIME_APPLICATION_OCTET_STREAM,
+          data: IlpPacket.errorToReject('', err)
+        }]
       }
     }
 

@@ -20,7 +20,7 @@ test('client streams data and money to server', async t => {
   for (let address of addresses) {
     // If the balance of the account goes below 5 ETH, top up from faucet
     const balance = await web3.eth.getBalance(address)
-    if (convert(5, Unit.Eth, Unit.Wei).gt(balance)) {
+    if (convert(5, Unit.Eth, Unit.Wei).gt(balance.toString())) {
       const { data } = await axios.post(`https://faucet.metamask.io/`, address, {
         headers: {
           'Content-Type': 'application/rawdata'
