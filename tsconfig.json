@@ -9,6 +9,7 @@
     "declaration": true,
     "removeComments": true,
     // "strict": true /* Enable all strict type-checking options. */,
+    "strictNullChecks": true,
     "resolveJsonModule": true,
   },
   "include": [
