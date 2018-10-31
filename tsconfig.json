@@ -8,7 +8,7 @@
     "sourceMap": true,
     "declaration": true,
     "removeComments": true,
-    "strict": true /* Enable all strict type-checking options. */,
+    // "strict": true /* Enable all strict type-checking options. */,
     "resolveJsonModule": true,
   },
   "include": [
