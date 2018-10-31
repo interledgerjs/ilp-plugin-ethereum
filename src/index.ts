@@ -13,7 +13,7 @@ import createLogger from 'ilp-logger'
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 
-interface EthereumPluginOpts {
+export interface EthereumPluginOpts {
   role: 'client' | 'server'
   // Private key of the Ethereum account used to send and receive
   // Corresponds to the address shared with peers
@@ -59,7 +59,7 @@ interface EthereumPluginOpts {
   channelWatcherInterval?: BigNumber.Value
 }
 
-export = class EthereumPlugin extends EventEmitter2 implements PluginInstance {
+export default class EthereumPlugin extends EventEmitter2 implements PluginInstance {
   static readonly version = 2
   private readonly _role: 'client' | 'server'
   private readonly _plugin: EthereumClientPlugin | EthereumServerPlugin

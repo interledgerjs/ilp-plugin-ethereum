@@ -1,6 +1,6 @@
 import Web3 = require('web3')
 import * as getPort from 'get-port'
-import EthereumPlugin = require('..')
+import EthereumPlugin from '..'
 import { convert, Unit } from '../account'
 import { getContract, generateTx } from '../utils/contract'
 import { MemoryStore } from '../utils/store'

@@ -1,4 +1,4 @@
-import EthereumPlugin = require('.')
+import EthereumPlugin from '.'
 import EthereumAccount, { requestId } from './account'
 import BtpPlugin, { BtpPacket, BtpSubProtocol } from 'ilp-plugin-btp'
 import MiniAccountsPlugin from 'ilp-plugin-mini-accounts'
@@ -131,6 +131,7 @@ export class EthereumServerPlugin extends MiniAccountsPlugin implements PluginIn
     return this._getAccount(from).handleMoney(message)
   }
 
+  // @ts-ignore Different versions of ilp-packet between this and mini-accounts
   _handlePrepareResponse = (
     destination: string,
     responsePacket: IlpPacket.IlpPacket,

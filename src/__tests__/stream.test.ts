@@ -2,7 +2,7 @@ import Web3 = require('web3')
 import * as IlpStream from 'ilp-protocol-stream'
 import * as getPort from 'get-port'
 import axios from 'axios'
-import EthereumPlugin = require('..')
+import EthereumPlugin from '..'
 import { convert, Unit } from '../account'
 import BigNumber from 'bignumber.js'
 import test from 'ava'

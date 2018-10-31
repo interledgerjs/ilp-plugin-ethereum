@@ -5,7 +5,7 @@ import BigNumber from 'bignumber.js'
 import { DataHandler, MoneyHandler } from './utils/types'
 import { BtpPacket, BtpPacketData, BtpSubProtocol } from 'ilp-plugin-btp'
 import * as IlpPacket from 'ilp-packet'
-import EthereumPlugin = require('.')
+import EthereumPlugin from '.'
 import { randomBytes } from 'crypto'
 import { promisify } from 'util'
 import {
