@@ -267,20 +267,19 @@ export default class EthereumAccount {
    *   simplifies the balance logic (but does require committing the balance first, then refunding)
    */
   async attemptSettle (): Promise<void> {
+    return this.queue.synchronize(TaskPriority.Outgoing, async () => {
     let settlementBudget = new BigNumber(0)
     let amountLeftover = new BigNumber(0)
 
-    try {
       // Don't attempt settlement if there's no configured settle threshold ("receive only" mode)
       const settleThreshold = this.master._balance.settleThreshold
       if (!settleThreshold) {
-        return this.master._log.trace('Cannot settle: settle threshold must be configured for automated settlement')
+        return
       }
 
       const shouldSettle = settleThreshold.gt(this.account.balance)
       if (!shouldSettle) {
-        return this.master._log.trace(`Cannot settle: balance of ${format(this.account.balance, Unit.Gwei)} ` +
-          `is not below settle threshold of ${format(settleThreshold, Unit.Gwei)}`)
+        return
       }
 
       settlementBudget = this.master._balance.settleTo.minus(this.account.balance)
@@ -294,9 +293,11 @@ export default class EthereumAccount {
       // If we're prefunding, the payoutAmount is infinity, so it doesn't affect the amount to settle
       settlementBudget = BigNumber.min(settlementBudget, this.account.payoutAmount)
       if (settlementBudget.lte(0)) {
-        return this.master._log.trace(`Cannot settle: no fulfilled packets have yet to be settled, ` +
-          `payout amount is ${format(this.account.payoutAmount, Unit.Gwei)}`)
+        return
       }
+
+      try {
+        this.master._log.info(`Settlement triggered with account ${this.account.accountName} for maximum of ${format(settlementBudget, Unit.Gwei)}`)
 
       // This should never error, since settleTo < maximum
       this.addBalance(settlementBudget)
@@ -304,7 +305,6 @@ export default class EthereumAccount {
 
       // Convert gwei to wei
       settlementBudget = convert(settlementBudget, Unit.Gwei, Unit.Wei).dp(0, BigNumber.ROUND_FLOOR)
-      this.master._log.trace(`Attempting to settle with account ${this.account.accountName} for maximum of ${format(settlementBudget, Unit.Wei)}`)
 
       type SettleTask = (budget: BigNumber) => Promise<BigNumber>
       const tasks: SettleTask[] = [
@@ -326,22 +326,34 @@ export default class EthereumAccount {
     } finally {
       const amountSettled = settlementBudget.minus(amountLeftover)
 
+        const spent = format(amountSettled, Unit.Wei)
+        const leftover = format(amountLeftover, Unit.Wei)
+        const account = this.account.accountName
+
+        if (amountSettled.eq(settlementBudget)) {
+          this.master._log.trace(`Settle attempt complete: spent entire budget of ${spent} settling with ${account}`)
+        } else if (amountSettled.lt(settlementBudget)) {
       if (amountSettled.gt(0)) {
-        this.master._log.trace(`Settle attempt complete: spent total of ${format(amountSettled, Unit.Wei)} settling, ` +
-          `refunding ${format(amountLeftover, Unit.Wei)} back to balance with ${this.account.accountName}`)
+            this.master._log.trace(`Settle attempt complete: spent total of ${spent} settling, ` +
+              `refunding ${leftover} back to balance with ${account}`)
       } else if (amountSettled.isZero()) {
         this.master._log.trace(`Settle attempt complete: none of budget spent, ` +
-          `refunding ${format(amountLeftover, Unit.Wei)} back to balance with ${this.account.accountName}`)
+              `refunding ${leftover} back to balance with ${account}`)
       } else {
-        this.master._log.error(`Critical settlement error: spent ${format(amountSettled, Unit.Wei)}, ` +
-          `more than budget of ${format(settlementBudget, Unit.Wei)} with ${this.account.accountName}`)
+            // Is this an error, or does this mean we received money out of the settlement?
+            this.master._log.error(`Critical settlement error: spent ${spent}, less than 0`)
       }
+        } else {
+          this.master._log.error(`Critical settlement error: spent ${spent}, ` +
+            `more than budget of ${format(settlementBudget, Unit.Wei)} with ${account}`)
+        }
 
       amountLeftover = convert(amountLeftover, Unit.Wei, Unit.Gwei).dp(0, BigNumber.ROUND_FLOOR)
 
       this.subBalance(amountLeftover)
       this.account.payoutAmount = this.account.payoutAmount.plus(amountLeftover)
     }
+    })
   }
 
   private async fundOutgoingChannel (settlementBudget: BigNumber): Promise<BigNumber> {
@@ -776,9 +788,6 @@ export default class EthereumAccount {
     const isFulfill = responsePacket.type === IlpPacket.Type.TYPE_ILP_FULFILL
     const isReject = responsePacket.type === IlpPacket.Type.TYPE_ILP_REJECT
 
-    // Attempt to settle on fulfills and* T04s (to resolve stalemates)
-    const attemptSettle = isFulfill || (isReject && responsePacket.data.code === 'T04')
-
     if (isFulfill) {
       this.master._log.trace(`Received a FULFILL in response to the forwarded PREPARE from sendData`)
 
@@ -794,9 +803,10 @@ export default class EthereumAccount {
       }
     }
 
-    if (attemptSettle) {
-      this.outgoingSettlements.runExclusive(() => this.attemptSettle())
-        .catch(err => {
+    // Attempt to settle on fulfills and* T04s (to resolve stalemates)
+    const shouldSettle = isFulfill || (isReject && responsePacket.data.code === 'T04')
+    if (shouldSettle) {
+      this.attemptSettle().catch((err: Error) => {
           this.master._log.trace(`Error queueing an outgoing settlement: ${err.message}`)
         })
     }
