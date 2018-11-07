@@ -1,6 +1,6 @@
 import Web3 = require('web3')
 import * as IlpStream from 'ilp-protocol-stream'
-import * as getPort from 'get-port'
+import getPort from 'get-port'
 import axios from 'axios'
 import EthereumPlugin from '..'
 import { convert, Unit } from '../account'
@@ -49,13 +49,12 @@ test('client streams data and money to server', async t => {
   const INCOMING_FEE = convert('0.00018', Unit.Eth, Unit.Gwei)
   const RECEIVER_MAX_BALANCE = 0
 
-  const port = await (getPort() as Promise<number>)
+  const port = await getPort()
 
   const clientPlugin = new EthereumPlugin({
     role: 'client',
     ethereumPrivateKey: process.env.PRIVATE_KEY_A!,
     ethereumProvider: process.env.ETHEREUM_PROVIDER!,
-    // @ts-ignore
     server: `btp+ws://userA:secretA@localhost:${port}`,
     outgoingChannelAmount: convert('0.002', Unit.Eth, Unit.Gwei),
     balance: {
@@ -69,7 +68,6 @@ test('client streams data and money to server', async t => {
     role: 'server',
     ethereumPrivateKey: process.env.PRIVATE_KEY_B!,
     ethereumProvider: process.env.ETHEREUM_PROVIDER!,
-    // @ts-ignore
     debugHostIldcpInfo: {
       assetCode: 'ETH',
       assetScale: 9,
@@ -86,7 +84,7 @@ test('client streams data and money to server', async t => {
   let actualReceived = new BigNumber(0)
 
   clientPlugin.registerMoneyHandler(Promise.resolve)
-  serverPlugin.registerMoneyHandler((amount: string) => {
+  serverPlugin.registerMoneyHandler(async (amount: string) => {
     actualReceived = actualReceived.plus(amount)
   })
 
