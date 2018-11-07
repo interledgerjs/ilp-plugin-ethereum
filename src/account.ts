@@ -358,30 +358,21 @@ export default class EthereumAccount {
 
   private async fundOutgoingChannel (settlementBudget: BigNumber): Promise<BigNumber> {
     try {
-      // Determine if an on-chain funding transaction needs to occur
-      let requiresNewChannel = false
-      let requiresDeposit = false
-      let channel: Channel | undefined
-      if (typeof this.account.outgoingChannelId === 'string') {
-        // Update channel details and fetch latest state
-        channel = await this.updateChannel(this.account.outgoingChannelId)
-        if (!channel) {
-          // Channel doesn't exist (or is settled), so attempt to create a new one
-          requiresNewChannel = true
-        } else {
-          // If amount to settle is greater than amount in channel, try to deposit
+      const channel = typeof this.account.outgoingChannelId !== 'string'
+        ? this.account.outgoingChannelId
+        : await this.fetchChannel(this.account.outgoingChannelId)
+
+      const requiresNewChannel = !channel
+
+      const requiresDeposit = channel
+        // Channel must be open and not settling to deposit
+        && !isSettling(channel)
+        // Amount to settle must be greater than amount in channel
+        && (() => {
           const outgoingClaimValue = this.account.bestOutgoingClaim ? this.account.bestOutgoingClaim.value : 0
           const remainingInChannel = channel.value.minus(outgoingClaimValue)
-          requiresDeposit = settlementBudget.gt(remainingInChannel)
-
-          if (requiresDeposit && isSettling(channel)) {
-            this.master._log.trace(`Cannot deposit to channel: ${channel.channelId} is settling`)
-            return settlementBudget
-          }
-        }
-      } else {
-        requiresNewChannel = true
-      }
+          return settlementBudget.gt(remainingInChannel)
+        })()
 
       // Note: channel value should be based on the settle amount, but doesn't affect the settle amount!
       // Only on-chain tx fees and outgoing payment channel claims should impact the settle amount
