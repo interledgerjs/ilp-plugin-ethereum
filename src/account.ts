@@ -1,6 +1,12 @@
 import Web3 = require('web3')
 import { TransactionReceipt } from 'web3/types'
-const BtpPacket = require('btp-packet')
+import {
+  TYPE_MESSAGE,
+  TYPE_TRANSFER,
+  MIME_APPLICATION_JSON,
+  MIME_APPLICATION_OCTET_STREAM,
+  MIME_TEXT_PLAIN_UTF8
+} from 'btp-packet'
 import BigNumber from 'bignumber.js'
 import { DataHandler, MoneyHandler } from './utils/types'
 import { BtpPacket, BtpPacketData, BtpSubProtocol } from 'ilp-plugin-btp'
@@ -9,16 +15,15 @@ import EthereumPlugin from '.'
 import { randomBytes } from 'crypto'
 import { promisify } from 'util'
 import {
-  Claim,
-  Channel,
-  fetchChannel,
-  getNetwork,
-  getContract,
+  IClaim,
+  IChannel,
   generateChannelId,
   generateTx,
-  isSettling
+  isSettling,
+  fetchChannel
 } from './utils/contract'
 import Mutex from './utils/queue'
+import EventEmitter from 'eventemitter3'
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 
@@ -211,12 +216,12 @@ export default class EthereumAccount {
     if (typeof this.account.ethereumAddress === 'string') return
     try {
       const response = await this.sendMessage({
-        type: BtpPacket.TYPE_MESSAGE,
+        type: TYPE_MESSAGE,
         requestId: await requestId(),
         data: {
           protocolData: [{
             protocolName: 'info',
-            contentType: BtpPacket.MIME_APPLICATION_JSON,
+            contentType: MIME_APPLICATION_JSON,
             data: Buffer.from(JSON.stringify({
               ethereumAddress: this.master._ethereumAddress
             }))
@@ -557,20 +562,20 @@ export default class EthereumAccount {
 
       // Send paychan claim to client, don't await a response
       this.sendMessage({
-        type: BtpPacket.TYPE_TRANSFER,
+        type: TYPE_TRANSFER,
         requestId: await requestId(),
         data: {
           amount: convert(value, Unit.Wei, Unit.Gwei).toFixed(0, BigNumber.ROUND_CEIL),
           protocolData: [{
             protocolName: 'machinomy',
-            contentType: BtpPacket.MIME_APPLICATION_JSON,
+            contentType: MIME_APPLICATION_JSON,
             data: Buffer.from(JSON.stringify(claim))
           }]
         }
-      }).catch(err => {
+      }).catch(err =>
         // In any case, this isn't particularly important/actionable
         this.master._log.trace(`Error while sending claim to peer: ${err.message}`)
-      })
+      )
     } catch (err) {
       this.master._log.error(`Failed to send claim to ${this.account.accountName}: ${err.message}`)
     } finally {
@@ -645,13 +650,13 @@ export default class EthereumAccount {
 
         return [{
           protocolName: 'ilp',
-          contentType: BtpPacket.MIME_APPLICATION_OCTET_STREAM,
+          contentType: MIME_APPLICATION_OCTET_STREAM,
           data: response
         }]
       } catch (err) {
         return [{
           protocolName: 'ilp',
-          contentType: BtpPacket.MIME_APPLICATION_OCTET_STREAM,
+          contentType: MIME_APPLICATION_OCTET_STREAM,
           data: IlpPacket.errorToReject('', err)
         }]
       }
