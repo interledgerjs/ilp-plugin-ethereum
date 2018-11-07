@@ -567,6 +567,7 @@ export default class EthereumAccount {
 
   async handleData (message: BtpPacket): Promise<BtpSubProtocol[]> {
     const info = getSubprotocol(message, 'info')
+    const requestClose = getSubprotocol(message, 'requestClose')
     const ilp = getSubprotocol(message, 'ilp')
 
     // Link the given Ethereum address & inform counterparty what address this wants to be paid at
@@ -575,10 +576,25 @@ export default class EthereumAccount {
 
       return [{
         protocolName: 'info',
-        contentType: BtpPacket.MIME_APPLICATION_JSON,
+        contentType: MIME_APPLICATION_JSON,
         data: Buffer.from(JSON.stringify({
           ethereumAddress: this.master._ethereumAddress
         }))
+      }]
+    }
+
+    // If the peer requests to close a channel, try to close it, if it's profitable
+    if (requestClose) {
+      this.master._log.info(`Channel close requested for account ${this.account.accountName}`)
+
+      this.claimIfProfitable().catch(err => {
+        this.master._log.error(`Error attempting to claim channel: ${err.message}`)
+      })
+
+      return [{
+        protocolName: 'requestClose',
+        contentType: MIME_TEXT_PLAIN_UTF8,
+        data: Buffer.alloc(0)
       }]
     }
 
@@ -876,16 +892,35 @@ export default class EthereumAccount {
     })
   }
 
+  // From mini-accounts: invoked on a websocket close or error event
+  // From plugin-btp: invoked *only* when `disconnect` is called on plugin
   async disconnect (): Promise<void> {
+    if (this.master._closeOnDisconnect) {
+      await Promise.all([
+        // Request the peer to claim the outgoing channel
+        this.sendMessage({
+          requestId: await requestId(),
+          type: TYPE_MESSAGE,
+          data: {
+            protocolData: [{
+              protocolName: 'requestClose',
+              contentType: MIME_TEXT_PLAIN_UTF8,
+              data: Buffer.alloc(0)
+            }]
+          }
+        }).catch(err =>
+          this.master._log.trace(`Error while requesting peer to claim channel: ${err.message}`)
+        ),
+        // Claim the incoming channel
+        this.claimIfProfitable
+      ])
+
+      // Only stop the channel watcher if the channels were attempted to be closed
     if (this.watcher) {
       clearInterval(this.watcher)
     }
-
-    // Finish processing all incoming settlements before claiming & disconnecting
-    await Promise.all([
-      this.incomingSettlements.runExclusive(() => Promise.resolve()),
-      this.outgoingSettlements.runExclusive(() => Promise.resolve())
-    ])
+    }
+  }
 
   unload (): void {
     // Stop the channel watcher
