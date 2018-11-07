@@ -1,8 +1,8 @@
 import Web3 = require('web3')
-import * as getPort from 'get-port'
+import getPort from 'get-port'
 import EthereumPlugin from '..'
 import { convert, Unit } from '../account'
-import { getContract, generateTx } from '../utils/contract'
+import { getContract, generateTx, getNetwork } from '../utils/contract'
 import { MemoryStore } from '../utils/store'
 import test from 'ava'
 
@@ -11,7 +11,7 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
 
   const web3 = new Web3(process.env.ETHEREUM_PROVIDER!)
 
-  const port = await (getPort() as Promise<number>)
+  const port = await getPort()
 
   const clientStore = new MemoryStore()
   const clientPlugin = new EthereumPlugin({
@@ -22,36 +22,54 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
       settleTo: convert('0.01', Unit.Eth, Unit.Gwei),
       settleThreshold: convert('0.000000001', Unit.Eth, Unit.Gwei)
     },
-    // @ts-ignore
-    server: `btp+ws://userA:secretA@localhost:${port}`
+    server: `btp+ws://userA:secretA@localhost:${port}`,
+    // Don't ask the server to claim on disconnect
+    closeOnDisconnect: false
   }, {
     store: clientStore
   })
 
-  const serverPlugin = new EthereumPlugin({
-    role: 'server',
-    ethereumPrivateKey: process.env.PRIVATE_KEY_B!,
-    ethereumProvider: process.env.ETHEREUM_PROVIDER!,
-    channelWatcherInterval: 5000, // Every 5 sec
-    // @ts-ignore
-    debugHostIldcpInfo: {
-      assetCode: 'ETH',
-      assetScale: 9,
-      clientAddress: 'private.ethereum'
-    },
-    port
-  })
+  const serverStore = new MemoryStore()
+  const createServer = async (): Promise<EthereumPlugin> => {
+    const serverPlugin = new EthereumPlugin({
+      role: 'server',
+      ethereumPrivateKey: process.env.PRIVATE_KEY_B!,
+      ethereumProvider: process.env.ETHEREUM_PROVIDER!,
+      channelWatcherInterval: 5000, // Every 5 sec
+      debugHostIldcpInfo: {
+        assetCode: 'ETH',
+        assetScale: 9,
+        clientAddress: 'private.ethereum'
+      },
+      port
+    }, {
+      store: serverStore
+    })
 
-  serverPlugin.registerMoneyHandler(() => Promise.resolve())
+    serverPlugin.registerMoneyHandler(() => Promise.resolve())
+    await serverPlugin.connect()
+
+    return serverPlugin
+  }
+
+  const serverPlugin = await createServer()
+
+  // Create channel & send claim to server
   clientPlugin.registerMoneyHandler(() => Promise.resolve())
-
-  await serverPlugin.connect()
   await clientPlugin.connect()
 
-  const channelId = JSON.parse(await clientStore.get('server:account') as string)
+  // Wait for claims to finish processing
+  await new Promise(r => setTimeout(r, 5000))
+
+  // Disconnect the client & server, then start settling the channel
+  await clientPlugin.disconnect()
+  await serverPlugin.disconnect()
+
+  const channelId = JSON.parse(await clientStore.get('peer:account') as string)
     .bestOutgoingClaim.channelId as string
 
-  const contract = await getContract(web3)
+  const network = await getNetwork(web3)
+  const contract = await getContract(web3, network)
 
   // TODO web3.js beta 36 event bugs: https://github.com/ethereum/web3.js/issues/1916
   // contract.events.DidClaim({
@@ -67,6 +85,9 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
   const tx = await generateTx({ web3, txObj, from: address })
 
   await web3.eth.sendTransaction(tx)
+
+  // Start the server back up to make sure the channel watcher claims the channel
+  await createServer()
 
   await new Promise(resolve => {
     const interval = setInterval(async () => {

@@ -53,27 +53,27 @@ export const requestId = async () =>
   (await promisify(randomBytes)(4)).readUInt32BE(0)
 
 export interface AccountData {
-    // Hash/account identifier in ILP address
-    accountName: string
-    // Net amount in gwei the counterparty owes the this instance, including secured paychan claims
-    // - Negative implies this instance owes the counterparty
-    balance: BigNumber
-    // Sum of all fulfilled packets owed to the counterparty that have yet to be paid out (always >= 0)
-    // - The balance limits when settlements happen, but this limits the settlement amount so we don't send
-    //   all the clients' money directly back to them!
-    payoutAmount: BigNumber
-    // Ethereum address counterparty should be paid at
-    // - Does not pertain to address counterparty sends from
-    // - Must be linked for the lifetime of the account
-    ethereumAddress?: string
-    // ID for paychan from this -> counterparty
-    outgoingChannelId?: string
-    // Greatest claim/payment from this -> counterparty
+  // Hash/account identifier in ILP address
+  accountName: string
+  // Net amount in gwei the counterparty owes the this instance, including secured paychan claims
+  // - Negative implies this instance owes the counterparty
+  balance: BigNumber
+  // Sum of all fulfilled packets owed to the counterparty that have yet to be paid out (always >= 0)
+  // - The balance limits when settlements happen, but this limits the settlement amount so we don't send
+  //   all the clients' money directly back to them!
+  payoutAmount: BigNumber
+  // Ethereum address counterparty should be paid at
+  // - Does not pertain to address counterparty sends from
+  // - Must be linked for the lifetime of the account
+  ethereumAddress?: string
+  // ID for paychan from this -> counterparty
+  outgoingChannelId?: string
+  // Greatest claim/payment from this -> counterparty
   bestOutgoingClaim?: IClaim
-    // Greatest claim/payment from counterparty -> this
-    // - Also used for channelId, since a paychan wouldn't be linked without a claim
+  // Greatest claim/payment from counterparty -> this
+  // - Also used for channelId, since a paychan wouldn't be linked without a claim
   bestIncomingClaim?: IClaim
-  }
+}
 
 export default class EthereumAccount {
   private account: AccountData
@@ -135,8 +135,10 @@ export default class EthereumAccount {
         })
 
         return Reflect.set(account, key, val)
-    }
+      }
     })
+
+    this.watcher = this.startChannelWatcher()
   }
 
   private async fetchChannel (channelId: string): Promise<IChannel | undefined> {
@@ -184,7 +186,7 @@ export default class EthereumAccount {
     if (this.master._settleOnConnect) {
       return this.attemptSettle().catch((err: Error) => {
         this.master._log.trace(`Error queueing an outgoing settlement: ${err.message}`)
-    })
+      })
     }
   }
 
@@ -268,8 +270,8 @@ export default class EthereumAccount {
    */
   async attemptSettle (): Promise<void> {
     return this.queue.synchronize(TaskPriority.Outgoing, async () => {
-    let settlementBudget = new BigNumber(0)
-    let amountLeftover = new BigNumber(0)
+      let settlementBudget = new BigNumber(0)
+      let amountLeftover = new BigNumber(0)
 
       // Don't attempt settlement if there's no configured settle threshold ("receive only" mode)
       const settleThreshold = this.master._balance.settleThreshold
@@ -299,32 +301,32 @@ export default class EthereumAccount {
       try {
         this.master._log.info(`Settlement triggered with account ${this.account.accountName} for maximum of ${format(settlementBudget, Unit.Gwei)}`)
 
-      // This should never error, since settleTo < maximum
-      this.addBalance(settlementBudget)
-      this.account.payoutAmount = this.account.payoutAmount.minus(settlementBudget)
+        // This should never error, since settleTo < maximum
+        this.addBalance(settlementBudget)
+        this.account.payoutAmount = this.account.payoutAmount.minus(settlementBudget)
 
-      // Convert gwei to wei
-      settlementBudget = convert(settlementBudget, Unit.Gwei, Unit.Wei).dp(0, BigNumber.ROUND_FLOOR)
+        // Convert gwei to wei
+        settlementBudget = convert(settlementBudget, Unit.Gwei, Unit.Wei).dp(0, BigNumber.ROUND_FLOOR)
 
-      type SettleTask = (budget: BigNumber) => Promise<BigNumber>
-      const tasks: SettleTask[] = [
-        // 1) Try to send a claim: spend the channel down entirely before funding it
-        b => this.sendClaim(b),
-        // 2) Open or deposit to a channel if it's necessary to send anything leftover
-        b => this.fundOutgoingChannel(b),
-        // 3) Try to send a claim again since we may have more funds in the channel
-        b => this.sendClaim(b)
-      ]
+        type SettleTask = (budget: BigNumber) => Promise<BigNumber>
+        const tasks: SettleTask[] = [
+          // 1) Try to send a claim: spend the channel down entirely before funding it
+          b => this.sendClaim(b),
+          // 2) Open or deposit to a channel if it's necessary to send anything leftover
+          b => this.fundOutgoingChannel(b),
+          // 3) Try to send a claim again since we may have more funds in the channel
+          b => this.sendClaim(b)
+        ]
 
-      // Run each settle task sequentially, spending down from the budget
-      amountLeftover = await tasks.reduce(async (leftover: Promise<BigNumber>, task: SettleTask) => {
-        const budget = await leftover
-        return budget.lte(0) ? budget : task(budget)
-      }, Promise.resolve(settlementBudget))
-    } catch (err) {
-      this.master._log.error(`Error during settlement: ${err.message}`)
-    } finally {
-      const amountSettled = settlementBudget.minus(amountLeftover)
+        // Run each settle task sequentially, spending down from the budget
+        amountLeftover = await tasks.reduce(async (leftover: Promise<BigNumber>, task: SettleTask) => {
+          const budget = await leftover
+          return budget.lte(0) ? budget : task(budget)
+        }, Promise.resolve(settlementBudget))
+      } catch (err) {
+        this.master._log.error(`Error during settlement: ${err.message}`)
+      } finally {
+        const amountSettled = settlementBudget.minus(amountLeftover)
 
         const spent = format(amountSettled, Unit.Wei)
         const leftover = format(amountLeftover, Unit.Wei)
@@ -333,26 +335,26 @@ export default class EthereumAccount {
         if (amountSettled.eq(settlementBudget)) {
           this.master._log.trace(`Settle attempt complete: spent entire budget of ${spent} settling with ${account}`)
         } else if (amountSettled.lt(settlementBudget)) {
-      if (amountSettled.gt(0)) {
+          if (amountSettled.gt(0)) {
             this.master._log.trace(`Settle attempt complete: spent total of ${spent} settling, ` +
               `refunding ${leftover} back to balance with ${account}`)
-      } else if (amountSettled.isZero()) {
-        this.master._log.trace(`Settle attempt complete: none of budget spent, ` +
+          } else if (amountSettled.isZero()) {
+            this.master._log.trace(`Settle attempt complete: none of budget spent, ` +
               `refunding ${leftover} back to balance with ${account}`)
-      } else {
+          } else {
             // Is this an error, or does this mean we received money out of the settlement?
             this.master._log.error(`Critical settlement error: spent ${spent}, less than 0`)
-      }
+          }
         } else {
           this.master._log.error(`Critical settlement error: spent ${spent}, ` +
             `more than budget of ${format(settlementBudget, Unit.Wei)} with ${account}`)
         }
 
-      amountLeftover = convert(amountLeftover, Unit.Wei, Unit.Gwei).dp(0, BigNumber.ROUND_FLOOR)
+        amountLeftover = convert(amountLeftover, Unit.Wei, Unit.Gwei).dp(0, BigNumber.ROUND_FLOOR)
 
-      this.subBalance(amountLeftover)
-      this.account.payoutAmount = this.account.payoutAmount.plus(amountLeftover)
-    }
+        this.subBalance(amountLeftover)
+        this.account.payoutAmount = this.account.payoutAmount.plus(amountLeftover)
+      }
     })
   }
 
@@ -426,7 +428,7 @@ export default class EthereumAccount {
             // For safety, if the tx is reverted, wasn't mined, or less gas was used, DO NOT credit the client's account
             this.master._log.error(`Failed to open channel: ${err.message}`)
             resolve()
-        })
+          })
         })
 
         emitter.removeAllListeners()
@@ -773,6 +775,11 @@ export default class EthereumAccount {
           this.account.bestIncomingClaim = claim
           this.master._log.info(`Accepted incoming claim from account ${this.account.accountName} for ${format(claimIncrement, Unit.Wei)}`)
 
+          // Start the channel watcher if it wasn't running
+          if (!this.watcher) {
+            this.watcher = this.startChannelWatcher()
+          }
+
           const amount = convert(claimIncrement, Unit.Wei, Unit.Gwei).dp(0, BigNumber.ROUND_DOWN)
           this.subBalance(amount)
 
@@ -804,7 +811,7 @@ export default class EthereumAccount {
         this.subBalance(amount)
         this.account.payoutAmount = this.account.payoutAmount.plus(amount)
       } catch (err) {
-          // Balance update likely dropped below the minimum, so throw an internal error
+        // Balance update likely dropped below the minimum, so throw an internal error
         this.master._log.trace(`Failed to fulfill response to PREPARE: ${err.message}`)
         throw new IlpPacket.Errors.InternalError(err.message)
       }
@@ -814,80 +821,85 @@ export default class EthereumAccount {
     const shouldSettle = isFulfill || (isReject && responsePacket.data.code === 'T04')
     if (shouldSettle) {
       this.attemptSettle().catch((err: Error) => {
-          this.master._log.trace(`Error queueing an outgoing settlement: ${err.message}`)
-        })
+        this.master._log.trace(`Error queueing an outgoing settlement: ${err.message}`)
+      })
     }
   }
 
-  private startChannelWatcher (): void {
-    const interval = this.master._channelWatcherInterval.toNumber()
-    const timer: NodeJS.Timer = setInterval(async () => {
-      try {
+  private startChannelWatcher () {
+    const timer: NodeJS.Timeout = setInterval(
+      () => this.queue.synchronize(TaskPriority.ChannelWatcher, async () => {
         const claim = this.account.bestIncomingClaim
-        if (!claim) return
-
-        const channel = await this.updateChannel(claim.channelId)
-
-        if (channel && isSettling(channel)) {
-          await this.claimIfProfitable(true)
+        if (!claim) {
+          // No claim is linked: stop the channel watcher
+          this.watcher = null
+          return clearInterval(timer)
         }
-      } catch (err) {
-        this.master._log.trace(`Error while running channel watcher: ${err.message}`)
-      }
-    }, interval)
 
-    // Check if we're in a Node.js environment
+        const channel = await this.fetchChannel(claim.channelId)
+        if (!channel) {
+          // Channel is closed: stop the channel watcher
+          this.watcher = null
+          return clearInterval(timer)
+        }
+
+        if (isSettling(channel)) {
+          this.claimIfProfitable(true).catch((err: Error) => {
+            this.master._log.trace(`Error attempting to claim channel: ${err.message}`)
+          })
+        }
+      }),
+      this.master._channelWatcherInterval.toNumber()
+    )
+
+    // Don't let the timer prevent existing the process if we're in Node.js
     // tslint:disable-next-line:strict-type-predicates
     if (typeof timer.unref === 'function') {
-      // Don't let timer prevent process from exiting
       timer.unref()
     }
 
-    this.watcher = timer
+    return timer
   }
 
-  public claimIfProfitable (requireSettling = false): Promise<void> {
-    return this.claimTransaction.runExclusive(async () => {
-      try {
-        const claim = this.account.bestIncomingClaim
-        if (!claim) return
+  private claimIfProfitable (requireSettling = false): Promise<void> {
+    return this.queue.synchronize(TaskPriority.ClaimTx, async () => {
+      const claim = this.account.bestIncomingClaim
+      if (!claim) {
+        return
+      }
 
-        const channel = await this.updateChannel(claim.channelId)
-        if (!channel) {
-          return this.master._log.trace(`Cannot claim channel ${claim.channelId} with ${this.account.accountName}: linked channel doesn't exist or is settled`)
-        }
+      const channel = await this.fetchChannel(claim.channelId)
+      if (!channel) {
+        return this.master._log.trace(`Cannot claim channel ${claim.channelId} with ${this.account.accountName}: linked channel doesn't exist or is settled`)
+      }
 
-        if (requireSettling && !isSettling(channel)) {
-          return this.master._log.trace(`Cannot claim channel ${claim.channelId} with ${this.account.accountName}: channel is not settling`)
-        }
+      if (requireSettling && !isSettling(channel)) {
+        return this.master._log.trace(`Cannot claim channel ${claim.channelId} with ${this.account.accountName}: channel is not settling`)
+      }
 
-        this.master._log.trace(`Attempting to claim channel ${claim.channelId} for ${format(claim.value, Unit.Wei)}`)
+      this.master._log.trace(`Attempting to claim channel ${claim.channelId} for ${format(claim.value, Unit.Wei)}`)
 
-        const contract = await getContract(this.master._web3)
-        const txObj = contract.methods.claim(claim.channelId, claim.value, claim.signature)
-        const tx = await generateTx({
-          txObj,
-          from: channel.receiver,
-          web3: this.master._web3
-        })
+      const txObj = this.master._contract!.methods.claim(claim.channelId, claim.value, claim.signature)
+      const tx = await generateTx({
+        txObj,
+        from: channel.receiver,
+        web3: this.master._web3
+      })
 
-        // Check to verify it's profitable first
-        // This fee should already be accounted for in balance as apart of the initiation fee
-        const txFee = new BigNumber(tx.gasPrice).times(tx.gas)
-        if (txFee.gte(claim.value)) {
-          return this.master._log.trace(`Not profitable to claim incoming settling channel ${claim.channelId} with ${this.account.accountName}: ` +
-            `fee of ${format(txFee, Unit.Wei)} is greater than value of ${format(claim.value, Unit.Wei)}`)
-        }
+      // Check to verify it's profitable first
+      // This fee should already be accounted for in balance as a part of the initiation fee
+      const txFee = new BigNumber(tx.gasPrice).times(tx.gas)
+      if (txFee.gte(claim.value)) {
+        return this.master._log.trace(`Not profitable to claim incoming settling channel ${claim.channelId} with ${this.account.accountName}: ` +
+          `fee of ${format(txFee, Unit.Wei)} is greater than value of ${format(claim.value, Unit.Wei)}`)
+      }
 
-        const receipt = await this.master._web3.eth.sendTransaction(tx)
+      const receipt = await this.master._web3.eth.sendTransaction(tx)
 
-        if (!receipt.status) {
-          this.master._log.trace(`Failed to claim channel ${claim.channelId}: transaction reverted by EVM`)
-        } else {
-          this.master._log.trace(`Successfully claimed channel ${claim.channelId} for account ${this.account.accountName}`)
-        }
-      } catch (err) {
-        this.master._log.error(`Failed to claim channel: ${err.message}`)
+      if (!receipt.status) {
+        this.master._log.trace(`Failed to claim channel ${claim.channelId}: transaction reverted by EVM`)
+      } else {
+        this.master._log.trace(`Successfully claimed channel ${claim.channelId} for account ${this.account.accountName}`)
       }
     })
   }
@@ -916,9 +928,9 @@ export default class EthereumAccount {
       ])
 
       // Only stop the channel watcher if the channels were attempted to be closed
-    if (this.watcher) {
-      clearInterval(this.watcher)
-    }
+      if (this.watcher) {
+        clearInterval(this.watcher)
+      }
     }
   }
 
