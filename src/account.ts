@@ -52,8 +52,7 @@ export const getSubprotocol = (message: BtpPacket, name: string) =>
 export const requestId = async () =>
   (await promisify(randomBytes)(4)).readUInt32BE(0)
 
-export default class EthereumAccount {
-  private account: {
+export interface AccountData {
     // Hash/account identifier in ILP address
     accountName: string
     // Net amount in gwei the counterparty owes the this instance, including secured paychan claims
@@ -70,11 +69,14 @@ export default class EthereumAccount {
     // ID for paychan from this -> counterparty
     outgoingChannelId?: string
     // Greatest claim/payment from this -> counterparty
-    bestOutgoingClaim?: Claim
+  bestOutgoingClaim?: IClaim
     // Greatest claim/payment from counterparty -> this
     // - Also used for channelId, since a paychan wouldn't be linked without a claim
-    bestIncomingClaim?: Claim
+  bestIncomingClaim?: IClaim
   }
+
+export default class EthereumAccount {
+  private account: AccountData
   // Cache for all channels (not persisted to store)
   private channelCache: {
     [channelId: string]: IChannel
@@ -83,40 +85,58 @@ export default class EthereumAccount {
   private master: EthereumPlugin
   // Send the given BTP packet message to this counterparty
   private sendMessage: (message: BtpPacket) => Promise<BtpPacketData>
-  // Data handler mapped from plugin
+  // Data handler from plugin for incoming ILP packets
   private dataHandler: DataHandler
-  // Money handler mapped from plugin
+  // Money handler from plugin for incoming money
   private moneyHandler: MoneyHandler
   // Single queue for all incoming settlements, outgoing settlements and channel claims
   private queue = new Mutex()
   // Timer/interval for channel watcher to claim incoming, settling channels
-  private watcher?: NodeJS.Timer
+  private watcher: NodeJS.Timer | null
 
-  constructor (opts: {
+  constructor ({
+    accountName,
+    accountData,
+    master,
+    sendMessage,
+    dataHandler,
+    moneyHandler
+  }: {
     accountName: string,
+    accountData?: AccountData,
     master: EthereumPlugin,
     // Wrap _call/expose method to send WS messages
     sendMessage: (message: BtpPacket) => Promise<BtpPacketData>,
     dataHandler: DataHandler,
     moneyHandler: MoneyHandler
   }) {
-    this.master = opts.master
-    this.sendMessage = opts.sendMessage
-    this.dataHandler = opts.dataHandler
-    this.moneyHandler = opts.moneyHandler
+    this.master = master
+    this.sendMessage = sendMessage
+    this.dataHandler = dataHandler
+    this.moneyHandler = moneyHandler
 
-    // No change detection until after `connect` is called
-    this.account = {
-      accountName: opts.accountName,
+    this.account = new Proxy({
+      accountName,
       balance: new BigNumber(0),
       payoutAmount: this.master._balance.settleTo.gt(0)
-        // If we're prefunding, we don't care about total fulfills
+        // If we're prefunding, we don't care about the total amount fulfilled
         // Since we take the min of this and the settleTo/settleThreshold delta, this
         // essentially disregards the payout amount
         ? new BigNumber(Infinity)
         // If we're settling up after fulfills, then we do care
-        : new BigNumber(0)
+        : new BigNumber(0),
+      ...accountData
+    }, {
+      set: (account, key, val) => {
+        // Commit the changes to the configured store
+        this.master._store.set(`${accountName}:account`, {
+          ...account,
+          [key]: val
+        })
+
+        return Reflect.set(account, key, val)
     }
+    })
   }
 
   private async fetchChannel (channelId: string): Promise<IChannel | undefined> {
@@ -161,51 +181,10 @@ export default class EthereumAccount {
   }
 
   async connect () {
-    const accountKey = `${this.account.accountName}:account`
-    await this.master._store.loadObject(accountKey)
-    const savedAccount: any = this.master._store.getObject(accountKey) || {}
-
-    // Parse balances, since they're non-primitives
-    // (otherwise the defaults from the constructor are used)
-    if (typeof savedAccount.balance === 'string') {
-      savedAccount.balance = new BigNumber(savedAccount.balance)
-    }
-    if (typeof savedAccount.payoutAmount === 'string') {
-      savedAccount.payoutAmount = new BigNumber(savedAccount.payoutAmount)
-    }
-
-    this.account = new Proxy({
-      ...this.account,
-      ...savedAccount
-    }, {
-      set: (account, key, val) => {
-        // Commit the changes to the configured store
-        this.master._store.set(accountKey, JSON.stringify({
-          ...account,
-          [key]: val
-        }))
-
-        return Reflect.set(account, key, val)
-      }
-    })
-
-    // Fetch the state of the incoming channel
-    const incomingChannelId = this.account.bestIncomingClaim &&
-      this.account.bestIncomingClaim.channelId
-    if (incomingChannelId) {
-      await this.updateChannel(incomingChannelId)
-    }
-
-    // Fetch the state of the outgoing channel
-    const outgoingChannelId = this.account.outgoingChannelId
-    if (outgoingChannelId) {
-      await this.updateChannel(outgoingChannelId)
-    }
-
-    this.startChannelWatcher()
-
     if (this.master._settleOnConnect) {
-      return this.outgoingSettlements.runExclusive(() => this.attemptSettle())
+      return this.attemptSettle().catch((err: Error) => {
+        this.master._log.trace(`Error queueing an outgoing settlement: ${err.message}`)
+    })
     }
   }
 
@@ -907,11 +886,16 @@ export default class EthereumAccount {
       this.outgoingSettlements.runExclusive(() => Promise.resolve())
     ])
 
-    if (this.master._claimOnDisconnect) {
-      await this.claimIfProfitable()
+  unload (): void {
+    // Stop the channel watcher
+    if (this.watcher) {
+      clearInterval(this.watcher)
     }
 
     // Remove account from store cache
-    return this.master._store.unload(`${this.account.accountName}:account`)
+    this.master._store.unload(`${this.account.accountName}:account`)
+
+    // Garbage collect the account at the top-level
+    this.master._accounts.delete(this.account.accountName)
   }
 }
