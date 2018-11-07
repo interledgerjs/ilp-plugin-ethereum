@@ -1,9 +1,10 @@
 # Interledger Ethereum Plugin
 
 [![NPM Package](https://img.shields.io/npm/v/ilp-plugin-ethereum/next.svg?style=flat)](https://npmjs.org/package/ilp-plugin-ethereum)
-![CircleCI](https://img.shields.io/circleci/project/github/interledgerjs/ilp-plugin-ethereum/ko-refactor.svg)
-![Codecov](https://img.shields.io/codecov/c/github/interledgerjs/ilp-plugin-ethereum/ko-refactor.svg)
+[![CircleCI](https://img.shields.io/circleci/project/github/interledgerjs/ilp-plugin-ethereum.svg)](https://circleci.com/gh/interledgerjs/ilp-plugin-ethereum)
+[![Codecov](https://img.shields.io/codecov/c/github/interledgerjs/ilp-plugin-ethereum.svg)](https://codecov.io/gh/interledgerjs/ilp-plugin-ethereum)
 [![JavaScript Style Guide](https://img.shields.io/badge/code_style-standard-brightgreen.svg)](https://standardjs.com)
+[![Apache 2.0 License](https://img.shields.io/github/license/interledgerjs/ilp-plugin-ethereum.svg)](https://github.com/interledgerjs/ilp-plugin-ethereum/blob/master/LICENSE)
 
 Settle Interledger payments with ether and (soon!) ERC-20 tokens. Powered by [Machinomy smart contracts](https://github.com/machinomy/machinomy) for unidirectional payment channels.
 
