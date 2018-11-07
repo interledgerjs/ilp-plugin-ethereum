@@ -1,86 +1,84 @@
 version: 2
+
 jobs:
   build:
     docker:
-      - image: circleci/node:10.2.1
-
+      - image: circleci/node:10
     working_directory: ~/repo
-
     steps:
       - checkout
-
       # Download and cache dependencies
       - restore_cache:
           keys:
-          - v1-dependencies-{{ checksum "package.json" }}
+          - v10-dependencies-{{ checksum "package.json" }}
           # fallback to using the latest cache if no exact match is found
-          - v1-dependencies-
-
-      - run: npm install
-
+          - v10-dependencies-
+      - run:
+          name: Install dependencies
+          command: npm install
       - save_cache:
           paths:
             - node_modules
-          key: v1-dependencies-{{ checksum "package.json" }}
-
-      # run tests!
-      #- run: npm test
-
-      # lint
-      - run: npm run lint
-
-      # upload coverage to codecov.io
-      #- run: npm run codecov
+          key: v10-dependencies-{{ checksum "package.json" }}
+      - run:
+          name: Build and compile
+          command: npm run build
+      - run:
+          name: Run tests
+          command: npm test
+      - run:
+          name: Lint files
+          command: npm run lint
+      - run:
+          name: Upload code coverage
+          command: npx codecov
+      - persist_to_workspace:
+          root: ~/repo
+          paths: .
 
   # Make sure the tests work on Node v8 as well
   build_node_v8:
     docker:
       - image: circleci/node:8
-
     working_directory: ~/repo_v8
-
     steps:
       - checkout
-
       # Download and cache dependencies
       - restore_cache:
           keys:
           - v8-dependencies-{{ checksum "package.json" }}
           # fallback to using the latest cache if no exact match is found
           - v8-dependencies-
-
-      - run: npm install
-
+      - run:
+          name: Install dependencies
+          command: npm install
       - save_cache:
           paths:
             - node_modules
           key: v8-dependencies-{{ checksum "package.json" }}
-
-      # run tests!
-      #- run: npm test
-
-  publish_to_npm:
-    docker:
-      - image: circleci/node:8
-
-    working_directory: ~/repo
-
-    steps:
-      - checkout
-
-      # Download and cache dependencies
-      - restore_cache:
-          keys:
-          - v1-dependencies-{{ checksum "package.json" }}
-          # fallback to using the latest cache if no exact match is found
-          - v1-dependencies-
-
-      - run: mv npmrc-env .npmrc
-
       - run:
-          name: Publish to NPM (only if a new version has been tagged)
-          command: if [ "$(npm show ilp-plugin-ethereum-asym-server)" != "$(npm ls --depth=-1 2>/dev/null | head -1 | cut -f 1 -d " " | cut -f 2 -d @)" ] ; then npm publish ; fi
+          name: Build and compile
+          command: npm run build
+      - run:
+          name: Run tests
+          command: npm test
+      - run:
+          name: Lint files
+          command: npm run lint
 
+  publish:
+    docker:
+      - image: circleci/node:10
+    working_directory: ~/repo
+    steps:
+      - attach_workspace:
+          at: ~/repo
+      - run:
+          name: Authenticate with registry
+          command: echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > ~/repo/.npmrc
+      - run:
+          name: Publish package
+          command: npm publish
 
 workflows:
   version: 2
@@ -88,18 +86,19 @@ workflows:
     jobs:
       - build:
           filters:
-            branches:
-              ignore:
-                - gh-pages
+            tags:
+              only: /.*/
       - build_node_v8:
-          filters:
-            branches:
-              ignore:
-                - gh-pages
-      - publish_to_npm:
           requires:
             - build
           filters:
+            tags:
+              only: /.*/
+      - publish:
+          requires:
+            - build_node_v8
+          filters:
+            tags:
+              only: /^v.*/
             branches:
-              only:
-                - master
+              ignore: /.*/
