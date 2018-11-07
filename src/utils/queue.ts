@@ -1,41 +1,55 @@
-export type Task<T> = () => Promise<T>
+enum QueueState {
+  /** Not running any tasks; immediately ready to start a new task */
+  IDLE,
+  /** Running a task */
+  BUSY
+}
 
 export default class Mutex {
-  private queue: Array<Task<any>> = []
-  private isBusy = false
-  private limit: number
-  private completed: Promise<any> = Promise.resolve()
+  private state = QueueState.IDLE
+  private queue: Array<{
+    task: () => Promise<any>,
+    priority: number
+  }> = []
 
-  constructor (limit: number = Infinity) {
-    this.limit = limit
-  }
-
-  async runExclusive<T> (task: Task<T>): Promise<T> {
-    // Only add another item to the queue if it's below the limit
-    if (this.limit >= this.queue.length + 1) {
-      this.completed = new Promise<T>(async (resolve, reject) => {
-        this.queue.push(() => task().then(resolve).catch(reject))
-
-        if (!this.isBusy) {
-          await this.dequeue()
-        }
+  /**
+   * Add a new task to the queue with the given priority
+   * @param priority greater numbers represent tasks that will run sooner than lesser numbers
+   * @param task the job to be completed in the future
+   */
+  synchronize<T> (priority: number, task: () => Promise<T>): Promise<T> {
+    const done = new Promise<T>((resolve, reject) => {
+      this.queue.push({
+        task: () => task().then(resolve, reject),
+        priority
       })
+    })
+
+    if (this.state === QueueState.IDLE) {
+      /* tslint:disable-next-line:no-floating-promises */
+      this.dequeue()
     }
 
-    return this.completed
+    return done
   }
 
+  /**
+   * Run tasks on the queue, by priority
+   * - Queue state **must** be idle in order to invoke this
+   */
   private async dequeue () {
+    this.state = QueueState.BUSY
+
+    this.queue = this.queue.sort((a, b) => b.priority - a.priority)
     const next = this.queue.shift()
 
     if (!next) {
-      this.isBusy = false
+      this.state = QueueState.IDLE
       return
     }
 
-    this.isBusy = true
     try {
-      await next()
+      await next.task()
     } finally {
       await this.dequeue()
     }

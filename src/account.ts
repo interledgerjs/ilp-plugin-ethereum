@@ -22,7 +22,18 @@ import Mutex from './utils/queue'
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 
-export enum Unit { Eth = 18, Gwei = 9, Wei = 0 }
+enum TaskPriority {
+  ClaimTx = 4,
+  ChannelWatcher = 3,
+  Incoming = 2,
+  Outgoing = 1
+}
+
+export enum Unit {
+  Eth = 18,
+  Gwei = 9,
+  Wei = 0
+}
 
 export const convert = (num: BigNumber.Value, from: Unit, to: Unit): BigNumber =>
   new BigNumber(num).shiftedBy(from - to)
@@ -67,13 +78,8 @@ export default class EthereumAccount {
   private dataHandler: DataHandler
   // Money handler mapped from plugin
   private moneyHandler: MoneyHandler
-  // Queue to handle all incoming settlements/BTP transfers
-  private incomingSettlements = new Mutex()
-  // Queue to handle all outgoing settlements
-  // If a settlement is occuring, only a single settlement can be queued
-  private outgoingSettlements = new Mutex(2)
-  // Queue of (at most) a single transaction to claim the incoming channel
-  private claimTransaction = new Mutex(1)
+  // Single queue for all incoming settlements, outgoing settlements and channel claims
+  private queue = new Mutex()
   // Timer/interval for channel watcher to claim incoming, settling channels
   private watcher?: NodeJS.Timer
 
