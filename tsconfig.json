@@ -11,6 +11,7 @@
     // "strict": true /* Enable all strict type-checking options. */,
     "strictNullChecks": true,
     "resolveJsonModule": true,
+    "esModuleInterop": true
   },
   "include": [
     "src"
