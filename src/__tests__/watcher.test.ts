@@ -1,4 +1,4 @@
-import Web3 = require('web3')
+import Web3 from 'web3'
 import getPort from 'get-port'
 import EthereumPlugin from '..'
 import { convert, Unit } from '../account'
@@ -9,15 +9,16 @@ import test from 'ava'
 test(`channel watcher claims settling channel if it's profitable`, async t => {
   t.plan(1)
 
-  const web3 = new Web3(process.env.ETHEREUM_PROVIDER!)
+  const ethereumProvider = new Web3.providers.HttpProvider(process.env.ETHEREUM_PROVIDER!)
+  const web3 = new Web3(ethereumProvider)
 
-  const port = await getPort()
+  const port = await (getPort() as Promise<number>)
 
   const clientStore = new MemoryStore()
   const clientPlugin = new EthereumPlugin({
     role: 'client',
     ethereumPrivateKey: process.env.PRIVATE_KEY_A!,
-    ethereumProvider: process.env.ETHEREUM_PROVIDER!,
+    ethereumProvider,
     balance: {
       settleTo: convert('0.01', Unit.Eth, Unit.Gwei),
       settleThreshold: convert('0.000000001', Unit.Eth, Unit.Gwei)
@@ -34,7 +35,7 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
     const serverPlugin = new EthereumPlugin({
       role: 'server',
       ethereumPrivateKey: process.env.PRIVATE_KEY_B!,
-      ethereumProvider: process.env.ETHEREUM_PROVIDER!,
+      ethereumProvider,
       channelWatcherInterval: 5000, // Every 5 sec
       debugHostIldcpInfo: {
         assetCode: 'ETH',
@@ -69,7 +70,7 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
     .bestOutgoingClaim.channelId as string
 
   const network = await getNetwork(web3)
-  const contract = await getContract(web3, network)
+  const contract = getContract(web3, network)
 
   // TODO web3.js beta 36 event bugs: https://github.com/ethereum/web3.js/issues/1916
   // contract.events.DidClaim({

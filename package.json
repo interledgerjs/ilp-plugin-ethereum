@@ -8,7 +8,8 @@
     "tag": "next"
   },
   "files": [
-    "build/**/*"
+    "build",
+    "!build/__tests__"
   ],
   "scripts": {
     "build": "tsc",
@@ -41,7 +42,6 @@
   "dependencies": {
     "@types/ethereumjs-util": "^5.2.0",
     "@types/web3": "^1.0.5",
-    "axios": "^0.18.0",
     "bignumber.js": "^7.2.1",
     "btp-packet": "^2.1.0",
     "debug": "^4.0.0",
@@ -58,7 +58,7 @@
     "ava": "^1.0.0-rc.1",
     "codecov": "^3.1.0",
     "get-port": "^4.0.0",
-    "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#ko-receive-only",
+    "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#ko-receive-only-tests",
     "nyc": "^13.0.1",
     "standard": "^11.0.1",
     "ts-node": "^7.0.1",

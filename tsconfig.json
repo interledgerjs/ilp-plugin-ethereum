@@ -1,7 +1,8 @@
 {
   "compilerOptions": {
-    "rootDir": "./src",
-    "outDir": "./build",
+    "baseUrl": "src",
+    "rootDir": "src",
+    "outDir": "build",
     "target": "es2017",
     "module": "commonjs",
     "moduleResolution": "node",
@@ -12,11 +13,5 @@
     "strictNullChecks": true,
     "resolveJsonModule": true,
     "esModuleInterop": true
-  },
-  "include": [
-    "src"
-  ],
-  "exclude": [
-    "src/__tests__"
-  ]
+  }
 }
