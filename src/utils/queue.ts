@@ -5,7 +5,7 @@ enum QueueState {
   BUSY
 }
 
-export default class Mutex {
+export default class Queue {
   private state = QueueState.IDLE
   private queue: Array<{
     task: () => Promise<any>,

@@ -22,7 +22,7 @@ import {
   isSettling,
   fetchChannel
 } from './utils/contract'
-import Mutex from './utils/queue'
+import Queue from './utils/queue'
 import EventEmitter from 'eventemitter3'
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
@@ -90,7 +90,7 @@ export default class EthereumAccount {
   // Money handler from plugin for incoming money
   private moneyHandler: MoneyHandler
   // Single queue for all incoming settlements, outgoing settlements and channel claims
-  private queue = new Mutex()
+  private queue = new Queue()
   // Timer/interval for channel watcher to claim incoming, settling channels
   private watcher: NodeJS.Timer | null
 
@@ -255,106 +255,97 @@ export default class EthereumAccount {
    * - Determine the maximum amount to settle, or settlement "budget", and immediately add it to the balance
    * - Each settlement operation will spend down from this amount, subtracting sent claims and fees
    * - `sendClaim` and `fundOutgoingChannel` take the settlement budget, and return the amount leftover
-   *    - e.g. if we couldn't open a channel because the fee > amountToSettle, it will error and just
-   *      return the original amount
+   *    - e.g. if we couldn't open a channel because the fee > amountToSettle, it will return the original amount
    *    - e.g. if it sent a claim for the entire amountToSettle, it will return 0 because there's
    *      nothing leftover
    * - This is really cool, because the amount to settle can "flow" from one settlement method to another,
    *   as each of them spend down from it!
-   * - The catch: before updating the settlement budget, the methods should guard against it going below 0.
-   *   Otherwise, they should just return the original budget and reject the promise (spiking out of
-   *   any further settlement)
+   * - The catch: before updating the settlement budget, the methods should guard against it going below 0,
+   *   or they should just return the original budget
    * - After all settlement operations, we refund the amount leftover (e.g. not spent) to the balance
    * - Keeping the settlement methods "pure" with respect to the balance of the account greatly
    *   simplifies the balance logic (but does require committing the balance first, then refunding)
    */
   async attemptSettle (): Promise<void> {
     return this.queue.synchronize(TaskPriority.Outgoing, async () => {
-      let settlementBudget = new BigNumber(0)
-      let amountLeftover = new BigNumber(0)
-
-      // Don't attempt settlement if there's no configured settle threshold ("receive only" mode)
       const settleThreshold = this.master._balance.settleThreshold
-      if (!settleThreshold) {
-        return
-      }
 
-      const shouldSettle = settleThreshold.gt(this.account.balance)
+      // Don't settle in "receive only" mode (no settle threshold configured)
+      const shouldSettle = settleThreshold
+        && settleThreshold.gt(this.account.balance)
+        && this.account.payoutAmount.gt(0)
+
       if (!shouldSettle) {
         return
       }
 
-      settlementBudget = this.master._balance.settleTo.minus(this.account.balance)
-      if (settlementBudget.lte(0)) {
-        // This *should* never happen, since the master constructor verifies that settleTo >= settleThreshold
-        return this.master._log.error(`Critical settlement error: settlement threshold triggered, but settle amount of ` +
-          `${format(settlementBudget, Unit.Gwei)} is 0 or negative`)
+      // Determine the amount to settle for
+      const settlementBudget = BigNumber.min(
+        this.master._balance.settleTo.minus(this.account.balance),
+        // If we're not prefunding, the amount should be limited by the total packets we've fulfilled
+        // If we're prefunding, the payoutAmount is infinity, so it doesn't affect the amount to settle
+        this.account.payoutAmount
+      )
+
+      // This should never error, since settleTo < maximum
+      this.addBalance(settlementBudget)
+      this.account.payoutAmount = this.account.payoutAmount.minus(settlementBudget)
+
+      // Convert gwei -> wei
+      const settlementBudgetWei = convert(settlementBudget, Unit.Gwei, Unit.Wei).dp(0, BigNumber.ROUND_FLOOR)
+
+      const budget = format(settlementBudgetWei, Unit.Wei)
+      const account = this.account.accountName
+      this.master._log.info(`Settlement triggered with ${account} for maximum of ${budget}`)
+
+      // If the the entire budget is spent, skip the subsequent settlement function
+      const checkBudget = (f: (budget: BigNumber) => Promise<BigNumber>) =>
+        (budget: BigNumber) =>
+          budget.lte(0) ? budget : f(budget)
+
+      const settle = (budget: BigNumber) =>
+        // 1) Try to send a claim: spend the channel down entirely before funding it
+        this.sendClaim(budget)
+        // 2) Open or deposit to a channel if it's necessary to send anything leftover
+        .then(checkBudget(l => this.fundOutgoingChannel(l)))
+        // 3) Try to send a claim again since we may have more funds in the channel
+        .then(checkBudget(l => this.sendClaim(l)))
+        // Guard against the amount leftover (to be refunded!) going above the initial budget
+        .then(l => BigNumber.min(l, budget))
+        // If there's an error, assume the entire amount was spent
+        .catch((err: Error) => {
+          this.master._log.error(`Error during outgoing settlement: ${err.message}`)
+          return new BigNumber(0)
+        })
+
+      // Perform the actual settlement
+      const amountLeftoverWei = await settle(settlementBudgetWei)
+      const amountSettledWei = settlementBudgetWei.minus(amountLeftoverWei)
+
+      // Logging helpers
+      const spent = format(amountSettledWei, Unit.Wei)
+      const leftover = format(amountLeftoverWei, Unit.Wei)
+
+      const spentPartialBudget = amountLeftoverWei.gt(0)
+      if (spentPartialBudget) {
+        this.master._log.trace(`Settlement with ${account} complete: spent ${spent} settling, refunding ${leftover}`)
       }
 
-      // If we're not prefunding, the amount should be limited by the total packets we've fulfilled
-      // If we're prefunding, the payoutAmount is infinity, so it doesn't affect the amount to settle
-      settlementBudget = BigNumber.min(settlementBudget, this.account.payoutAmount)
-      if (settlementBudget.lte(0)) {
-        return
+      const spentWholeBudget = amountLeftoverWei.isZero()
+      if (spentWholeBudget) {
+        this.master._log.trace(`Settlement with ${account} complete: spent entire budget of ${spent}`)
       }
 
-      try {
-        this.master._log.info(`Settlement triggered with account ${this.account.accountName} for maximum of ${format(settlementBudget, Unit.Gwei)}`)
-
-        // This should never error, since settleTo < maximum
-        this.addBalance(settlementBudget)
-        this.account.payoutAmount = this.account.payoutAmount.minus(settlementBudget)
-
-        // Convert gwei to wei
-        settlementBudget = convert(settlementBudget, Unit.Gwei, Unit.Wei).dp(0, BigNumber.ROUND_FLOOR)
-
-        type SettleTask = (budget: BigNumber) => Promise<BigNumber>
-        const tasks: SettleTask[] = [
-          // 1) Try to send a claim: spend the channel down entirely before funding it
-          b => this.sendClaim(b),
-          // 2) Open or deposit to a channel if it's necessary to send anything leftover
-          b => this.fundOutgoingChannel(b),
-          // 3) Try to send a claim again since we may have more funds in the channel
-          b => this.sendClaim(b)
-        ]
-
-        // Run each settle task sequentially, spending down from the budget
-        amountLeftover = await tasks.reduce(async (leftover: Promise<BigNumber>, task: SettleTask) => {
-          const budget = await leftover
-          return budget.lte(0) ? budget : task(budget)
-        }, Promise.resolve(settlementBudget))
-      } catch (err) {
-        this.master._log.error(`Error during settlement: ${err.message}`)
-      } finally {
-        const amountSettled = settlementBudget.minus(amountLeftover)
-
-        const spent = format(amountSettled, Unit.Wei)
-        const leftover = format(amountLeftover, Unit.Wei)
-        const account = this.account.accountName
-
-        if (amountSettled.eq(settlementBudget)) {
-          this.master._log.trace(`Settle attempt complete: spent entire budget of ${spent} settling with ${account}`)
-        } else if (amountSettled.lt(settlementBudget)) {
-          if (amountSettled.gt(0)) {
-            this.master._log.trace(`Settle attempt complete: spent total of ${spent} settling, ` +
-              `refunding ${leftover} back to balance with ${account}`)
-          } else if (amountSettled.isZero()) {
-            this.master._log.trace(`Settle attempt complete: none of budget spent, ` +
-              `refunding ${leftover} back to balance with ${account}`)
-          } else {
-            // Is this an error, or does this mean we received money out of the settlement?
-            this.master._log.error(`Critical settlement error: spent ${spent}, less than 0`)
-          }
-        } else {
-          this.master._log.error(`Critical settlement error: spent ${spent}, ` +
-            `more than budget of ${format(settlementBudget, Unit.Wei)} with ${account}`)
-        }
-
-        amountLeftover = convert(amountLeftover, Unit.Wei, Unit.Gwei).dp(0, BigNumber.ROUND_FLOOR)
-
-        this.subBalance(amountLeftover)
-        this.account.payoutAmount = this.account.payoutAmount.plus(amountLeftover)
+      const spentTooMuch = amountLeftoverWei.lt(0)
+      if (spentTooMuch) {
+        this.master._log.error(`Critical settlement error: spent ${spent}, above budget of ${budget} with ${account}`)
       }
+
+      // Convert wei -> gwei
+      const amountLeftover = convert(amountLeftoverWei, Unit.Wei, Unit.Gwei).dp(0, BigNumber.ROUND_FLOOR)
+
+      this.subBalance(amountLeftover)
+      this.account.payoutAmount = this.account.payoutAmount.plus(amountLeftover)
     })
   }
 
@@ -675,11 +666,10 @@ export default class EthereumAccount {
 
           const claim = JSON.parse(machinomy.data.toString())
 
-          const hasValidSchema = (o: any): o is IClaim => {
-            return typeof o.value === 'string'
-                && typeof o.channelId === 'string'
-                && typeof o.signature === 'string'
-          }
+          const hasValidSchema = (o: any): o is IClaim =>
+            typeof o.value === 'string'
+              && typeof o.channelId === 'string'
+              && typeof o.signature === 'string'
           if (!hasValidSchema(claim)) {
             throw new Error(`claim schema is malformed`)
           }
@@ -851,12 +841,6 @@ export default class EthereumAccount {
       }),
       this.master._channelWatcherInterval.toNumber()
     )
-
-    // Don't let the timer prevent existing the process if we're in Node.js
-    // tslint:disable-next-line:strict-type-predicates
-    if (typeof timer.unref === 'function') {
-      timer.unref()
-    }
 
     return timer
   }
