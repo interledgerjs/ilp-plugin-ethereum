@@ -22,7 +22,7 @@ import {
   isSettling,
   fetchChannel
 } from './utils/contract'
-import Queue from './utils/queue'
+import Queue from 'p-queue'
 import EventEmitter from 'eventemitter3'
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
@@ -89,8 +89,11 @@ export default class EthereumAccount {
   private dataHandler: DataHandler
   // Money handler from plugin for incoming money
   private moneyHandler: MoneyHandler
-  // Single queue for all incoming settlements, outgoing settlements and channel claims
-  private queue = new Queue()
+  // Priority FIFO queue for all incoming settlements, outgoing settlements, and channel claims
+  // - Operations with greater priority will be scheduled first
+  private queue = new Queue({
+    concurrency: 1
+  })
   // Timer/interval for channel watcher to claim incoming, settling channels
   private watcher: NodeJS.Timer | null
 
@@ -141,7 +144,7 @@ export default class EthereumAccount {
     this.watcher = this.startChannelWatcher()
   }
 
-  private async fetchChannel (channelId: string): Promise<IChannel | undefined> {
+  private async updateChannelCache (channelId: string): Promise<IChannel | undefined> {
     const channel = await fetchChannel(this.master._contract!, channelId)
     if (!channel) {
       delete this.channelCache[channelId]
@@ -267,7 +270,7 @@ export default class EthereumAccount {
    *   simplifies the balance logic (but does require committing the balance first, then refunding)
    */
   async attemptSettle (): Promise<void> {
-    return this.queue.synchronize(TaskPriority.Outgoing, async () => {
+    return this.queue.add(async () => {
       const settleThreshold = this.master._balance.settleThreshold
 
       // Don't settle in "receive only" mode (no settle threshold configured)
@@ -307,9 +310,9 @@ export default class EthereumAccount {
         // 1) Try to send a claim: spend the channel down entirely before funding it
         this.sendClaim(budget)
         // 2) Open or deposit to a channel if it's necessary to send anything leftover
-        .then(checkBudget(l => this.fundOutgoingChannel(l)))
+        .then(checkBudget(leftover => this.fundOutgoingChannel(leftover)))
         // 3) Try to send a claim again since we may have more funds in the channel
-        .then(checkBudget(l => this.sendClaim(l)))
+        .then(checkBudget(leftover => this.sendClaim(leftover)))
         // Guard against the amount leftover (to be refunded!) going above the initial budget
         .then(l => BigNumber.min(l, budget))
         // If there's an error, assume the entire amount was spent
@@ -346,6 +349,8 @@ export default class EthereumAccount {
 
       this.subBalance(amountLeftover)
       this.account.payoutAmount = this.account.payoutAmount.plus(amountLeftover)
+    }, {
+      priority: TaskPriority.Outgoing
     })
   }
 
@@ -353,7 +358,7 @@ export default class EthereumAccount {
     try {
       const channel = typeof this.account.outgoingChannelId !== 'string'
         ? this.account.outgoingChannelId
-        : await this.fetchChannel(this.account.outgoingChannelId)
+        : await this.updateChannelCache(this.account.outgoingChannelId)
 
       const requiresNewChannel = !channel
 
@@ -489,7 +494,7 @@ export default class EthereumAccount {
       // If the channel doesn't exist, try fetching state from network
       const channelId = this.account.outgoingChannelId
       const channel = this.channelCache[channelId]
-        || await this.fetchChannel(channelId)
+        || await this.updateChannelCache(channelId)
       if (!channel) {
         this.master._log.trace(`Cannot send claim to ${this.account.accountName}: linked channel doesn't exist or is settled`)
         return settlementBudget
@@ -657,7 +662,7 @@ export default class EthereumAccount {
   }
 
   async handleMoney (message: BtpPacket): Promise<BtpSubProtocol[]> {
-    return this.queue.synchronize(TaskPriority.Incoming, async () => {
+    return this.queue.add(async () => {
       try {
         const machinomy = getSubprotocol(message, 'machinomy')
 
@@ -679,7 +684,7 @@ export default class EthereumAccount {
             // New claim is using different channel from the old claim
             && oldClaim.channelId !== claim.channelId
             // Old channel is still open (if it was closed, a new claim is acceptable)
-            && (await this.fetchChannel(oldClaim.channelId))
+            && (await this.updateChannelCache(oldClaim.channelId))
           if (wrongChannel) {
             throw new Error(`account ${this.account.accountName} must use channel ${oldClaim!.channelId}`)
           }
@@ -692,7 +697,7 @@ export default class EthereumAccount {
           const shouldFetchChannel = !oldClaim || !channel
             || new BigNumber(claim.value).gt(channel.value)
           if (shouldFetchChannel) {
-            channel = await this.fetchChannel(claim.channelId)
+            channel = await this.updateChannelCache(claim.channelId)
           }
 
           if (!channel) {
@@ -784,6 +789,8 @@ export default class EthereumAccount {
         // Don't expose internal errors: this could be problematic if an error wasn't intentionally thrown
         throw new Error('Invalid claim')
       }
+    }, {
+      priority: TaskPriority.Incoming
     })
   }
 
@@ -818,7 +825,7 @@ export default class EthereumAccount {
 
   private startChannelWatcher () {
     const timer: NodeJS.Timeout = setInterval(
-      () => this.queue.synchronize(TaskPriority.ChannelWatcher, async () => {
+      () => this.queue.add(async () => {
         const claim = this.account.bestIncomingClaim
         if (!claim) {
           // No claim is linked: stop the channel watcher
@@ -826,7 +833,7 @@ export default class EthereumAccount {
           return clearInterval(timer)
         }
 
-        const channel = await this.fetchChannel(claim.channelId)
+        const channel = await this.updateChannelCache(claim.channelId)
         if (!channel) {
           // Channel is closed: stop the channel watcher
           this.watcher = null
@@ -838,6 +845,8 @@ export default class EthereumAccount {
             this.master._log.trace(`Error attempting to claim channel: ${err.message}`)
           })
         }
+      }, {
+        priority: TaskPriority.ChannelWatcher
       }),
       this.master._channelWatcherInterval.toNumber()
     )
@@ -846,13 +855,13 @@ export default class EthereumAccount {
   }
 
   private claimIfProfitable (requireSettling = false): Promise<void> {
-    return this.queue.synchronize(TaskPriority.ClaimTx, async () => {
+    return this.queue.add(async () => {
       const claim = this.account.bestIncomingClaim
       if (!claim) {
         return
       }
 
-      const channel = await this.fetchChannel(claim.channelId)
+      const channel = await this.updateChannelCache(claim.channelId)
       if (!channel) {
         return this.master._log.trace(`Cannot claim channel ${claim.channelId} with ${this.account.accountName}: linked channel doesn't exist or is settled`)
       }
@@ -885,6 +894,8 @@ export default class EthereumAccount {
       } else {
         this.master._log.trace(`Successfully claimed channel ${claim.channelId} for account ${this.account.accountName}`)
       }
+    }, {
+      priority: TaskPriority.ClaimTx
     })
   }
 
