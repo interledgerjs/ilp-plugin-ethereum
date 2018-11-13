@@ -1,5 +1,5 @@
 import EthereumAccount from '../account'
-import { PluginInstance, PluginServices } from './types'
+import { PluginInstance, PluginServices } from '../utils/types'
 import MiniAccountsPlugin from 'ilp-plugin-mini-accounts'
 import { ServerOptions } from 'ws'
 import { IldcpResponse } from 'ilp-protocol-ildcp'

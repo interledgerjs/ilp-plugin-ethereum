@@ -8,7 +8,7 @@ import {
   TYPE_MESSAGE,
   MIME_APPLICATION_OCTET_STREAM
 } from 'btp-packet'
-import { PluginInstance, PluginServices } from './types'
+import { PluginInstance, PluginServices } from '../utils/types'
 import { deserializeIlpPacket } from 'ilp-packet'
 
 export interface EthereumClientOpts extends IlpPluginBtpConstructorOptions {
