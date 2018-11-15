@@ -919,7 +919,7 @@ export default class EthereumAccount {
           this.master._log.trace(`Error while requesting peer to claim channel: ${err.message}`)
         ),
         // Claim the incoming channel
-        this.claimIfProfitable
+        this.claimIfProfitable()
       ])
 
       // Only stop the channel watcher if the channels were attempted to be closed
