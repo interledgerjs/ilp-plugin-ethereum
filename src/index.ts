@@ -1,32 +1,45 @@
 import { EventEmitter2 } from 'eventemitter2'
 import { StoreWrapper, MemoryStore } from './utils/store'
 import { Logger, PluginInstance, DataHandler, MoneyHandler, PluginServices } from './utils/types'
-import Web3 = require('web3')
-import { Provider } from 'web3/providers'
+import Web3 from 'web3'
+import IContract from 'web3/eth/contract'
+import { Provider as IProvider } from 'web3/providers'
 import BigNumber from 'bignumber.js'
-import { Channel } from './utils/contract'
-import { convert, Unit } from './account'
-import { EthereumClientPlugin, EthereumServerPlugin } from './plugin'
-import * as ethUtil from 'ethereumjs-util'
-import * as debug from 'debug'
+import EthereumAccount, { convert, Unit, AccountData } from './account'
+import { EthereumClientPlugin } from './plugin/client'
+import { EthereumServerPlugin, MiniAccountsOpts } from './plugin/server'
+import { isValidPrivate, toBuffer } from 'ethereumjs-util'
+import debug from 'debug'
 import createLogger from 'ilp-logger'
+import { INetwork, getNetwork, getContract } from './utils/contract'
+import { BtpPacket, IlpPluginBtpConstructorOptions } from 'ilp-plugin-btp'
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 
-export interface EthereumPluginOpts {
+// TODO Should the default handlers return ILP reject packets?
+
+const defaultDataHandler: DataHandler = () => {
+  throw new Error('no request handler registered')
+}
+
+const defaultMoneyHandler: MoneyHandler = () => {
+  throw new Error('no money handler registered')
+}
+
+export interface EthereumPluginOpts extends MiniAccountsOpts, IlpPluginBtpConstructorOptions {
   role: 'client' | 'server'
   // Private key of the Ethereum account used to send and receive
   // Corresponds to the address shared with peers
   ethereumPrivateKey: string
   // Provider to connect to a given Ethereum node
   // https://web3js.readthedocs.io/en/1.0/web3.html#providers
-  ethereumProvider?: string | Provider
+  ethereumProvider?: string | IProvider
   // Should the plugin immediately attempt to settle with its peer on connect?
   // - Default for clients is `true`; default for servers and direct peers is `false`
   settleOnConnect?: boolean
   // Should incoming channels to all accounts on the plugin be claimed whenever disconnect is called on the plugin?
   // - Default for clients is `true`; default for servers and direct peers is `false`
-  claimOnDisconnect?: boolean
+  closeOnDisconnect?: boolean
   // Default amount to fund when opening a new channel or depositing to a depleted channel (gwei)
   outgoingChannelAmount?: BigNumber.Value
   // Fee collected whenever a new channel is first linked to an account
@@ -61,13 +74,12 @@ export interface EthereumPluginOpts {
 
 export default class EthereumPlugin extends EventEmitter2 implements PluginInstance {
   static readonly version = 2
-  private readonly _role: 'client' | 'server'
   private readonly _plugin: EthereumClientPlugin | EthereumServerPlugin
   // Public so they're accessible to internal account class
   readonly _ethereumAddress: string
   readonly _web3: Web3
   readonly _settleOnConnect: boolean
-  readonly _claimOnDisconnect: boolean
+  readonly _closeOnDisconnect: boolean
   readonly _outgoingChannelAmount: BigNumber // wei
   readonly _incomingChannelFee: BigNumber // wei
   readonly _outgoingSettlementPeriod: BigNumber // # of blocks
@@ -79,21 +91,29 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
     settleThreshold?: BigNumber
     minimum: BigNumber
   }
-  readonly _channels: Map<string, Channel> = new Map() // channelId -> cached channel
+  readonly _accounts = new Map<string, EthereumAccount>() // accountName -> account
   readonly _channelWatcherInterval: BigNumber // ms
   readonly _store: StoreWrapper
   readonly _log: Logger
+  _network?: INetwork // ABI and address of the contract on the chain of provider
+  _contract?: IContract // Web3 contract object
+  _dataHandler: DataHandler = defaultDataHandler
+  _moneyHandler: MoneyHandler = defaultMoneyHandler
 
   constructor ({
     role = 'client',
     ethereumPrivateKey,
     ethereumProvider = 'wss://mainnet.infura.io/ws',
-    settleOnConnect = role === 'client', // By default, if client, settle initially & claim on disconnect
-    claimOnDisconnect = role === 'client',
+    settleOnConnect = role === 'client' /* By default, if client, settle initially & claim on disconnect */,
+    closeOnDisconnect = role === 'client',
     outgoingChannelAmount = convert('0.04', Unit.Eth, Unit.Gwei),
     incomingChannelFee = 0,
-    outgoingSettlementPeriod = 6 * (24 * 60 * 60) / 15, // ~ 6 days @ 15 sec block time
-    minIncomingSettlementPeriod = 3 * (24 * 60 * 60) / 15, // ~ 3 days @ 15 sec block time
+    outgoingSettlementPeriod = role === 'client'
+      ? 2 * (24 * 60 * 60) / 15  // ~ 2 days @ 15 sec block time
+      : 6 * (24 * 60 * 60) / 15, // ~ 6 days @ 15 sec block time
+    minIncomingSettlementPeriod = role === 'client'
+      ? 3 * (24 * 60 * 60) / 15 // ~ 3 days @ 15 sec block time
+      : (24 * 60 * 60) / 15, // ~ 1 day @ 15 sec block time
     maxPacketAmount = Infinity,
     balance: {
       maximum = Infinity,
@@ -101,9 +121,7 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
       settleThreshold = undefined,
       minimum = -Infinity
     } = {},
-    // For watcher interval, defaults to minimum of ~1000 cycles with min settlement period
-    channelWatcherInterval =
-      new BigNumber(minIncomingSettlementPeriod).times(15).div(1000),
+    channelWatcherInterval = new BigNumber(60 * 1000), // By default, every 60 seconds
     // All remaining params are passed to mini-accounts/plugin-btp
     ...opts
   }: EthereumPluginOpts, {
@@ -118,19 +136,17 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
       throw new Error('Ethereum private key is required')
     }
 
-    // Web3 requires a 0x in front; prepend it if it's missing
+    // Web3 requires a 0x in front, so prepend it if it's missing
     if (ethereumPrivateKey.indexOf('0x') !== 0) {
       ethereumPrivateKey = '0x' + ethereumPrivateKey
     }
 
-    if (!ethUtil.isValidPrivate(ethUtil.toBuffer(ethereumPrivateKey))) {
+    if (!isValidPrivate(toBuffer(ethereumPrivateKey))) {
       throw new Error('Invalid Ethereum private key')
     }
 
     this._web3 = new Web3(ethereumProvider)
     this._ethereumAddress = this._web3.eth.accounts.wallet.add(ethereumPrivateKey).address
-
-    this._role = role
 
     this._store = new StoreWrapper(store)
 
@@ -138,7 +154,7 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
     this._log.trace = this._log.trace || debug(`ilp-plugin-ethereum-${role}:trace`)
 
     this._settleOnConnect = settleOnConnect
-    this._claimOnDisconnect = claimOnDisconnect
+    this._closeOnDisconnect = closeOnDisconnect
 
     this._outgoingChannelAmount = convert(outgoingChannelAmount, Unit.Gwei, Unit.Wei)
       .abs().dp(0, BigNumber.ROUND_DOWN)
@@ -171,9 +187,6 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
         .dp(0, BigNumber.ROUND_CEIL)
     }
 
-    this._channelWatcherInterval = new BigNumber(channelWatcherInterval)
-      .abs().dp(0, BigNumber.ROUND_DOWN)
-
     // Validate balance configuration: max >= settleTo >= settleThreshold >= min
     if (this._balance.settleThreshold) {
       if (!this._balance.maximum.gte(this._balance.settleTo)) {
@@ -193,25 +206,98 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
       this._log.trace(`Auto-settlement disabled: plugin is in receive-only mode since no settleThreshold was configured`)
     }
 
-    const InternalPlugin = this._role === 'server' ? EthereumServerPlugin : EthereumClientPlugin
-    this._plugin = new InternalPlugin({
-      ...opts,
-      master: this
-    }, { store, log })
+    this._channelWatcherInterval = new BigNumber(channelWatcherInterval)
+      .abs().dp(0, BigNumber.ROUND_DOWN)
+
+    const loadAccount = (accountName: string) => this.loadAccount(accountName)
+    const getAccount = (accountName: string) => {
+      const account = this._accounts.get(accountName)
+      if (!account) {
+        throw new Error(`Account ${accountName} is not yet loaded`)
+      }
+
+      return account
+    }
+
+    this._plugin = role === 'server'
+      ? new EthereumServerPlugin({ getAccount, loadAccount, ...opts }, { store, log })
+      : new EthereumClientPlugin({ getAccount, loadAccount, ...opts }, { store, log })
 
     this._plugin.on('connect', () => this.emitAsync('connect'))
     this._plugin.on('disconnect', () => this.emitAsync('disconnect'))
     this._plugin.on('error', e => this.emitAsync('error', e))
   }
 
+  private async loadAccount (accountName: string): Promise<EthereumAccount> {
+    const accountKey = `${accountName}:account`
+    await this._store.loadObject(accountKey)
+    const accountData = this._store.getObject(accountKey) as (AccountData | undefined)
+
+    // Parse balances, since they're non-primitives
+    // (otherwise the defaults from the constructor are used)
+    if (accountData && 'balance' in accountData) {
+      accountData.balance = new BigNumber(accountData.balance)
+    }
+    if (accountData && 'payoutAmount' in accountData) {
+      accountData.payoutAmount = new BigNumber(accountData.payoutAmount)
+    }
+
+    // Account data must always be loaded from store before it's in the map
+    if (!this._accounts.has(accountName)) {
+      const account = new EthereumAccount({
+        sendMessage: (message: BtpPacket) =>
+          this._plugin._sendMessage(accountName, message),
+        dataHandler: (data: Buffer) =>
+          this._dataHandler(data),
+        moneyHandler: (amount: string) =>
+          this._moneyHandler(amount),
+        accountName,
+        accountData,
+        master: this
+      })
+
+      // Since this account didn't previosuly exist, save it in the store
+      this._accounts.set(accountName, account)
+      this._store.set('accounts', [...this._accounts.keys()])
+    }
+
+    return this._accounts.get(accountName)!
+  }
+
   async connect () {
+    // Cache the ID of the chain, and corresponding ABI/address of the contract
+    this._network = await getNetwork(this._web3)
+    this._contract = getContract(this._web3, this._network)
+
+    // Load all accounts from the store
+    await this._store.loadObject('accounts')
+    const accounts = (this._store.getObject('accounts') as string[] | void) || []
+
+    for (const accountName of accounts) {
+      this._log.trace(`Loading account ${accountName} from store`)
+      await this.loadAccount(accountName)
+
+      // Throttle loading accounts to ~100 per second
+      // Most accounts should shut themselves down shortly after they're loaded
+      await new Promise(r => setTimeout(r, 10))
+    }
+
+    // Don't allow any incoming messages to accounts until all initial loading is complete
+    // (this might create an issue, if an account requires _prefix to be known prior)
     return this._plugin.connect()
   }
 
   async disconnect () {
+    // Triggers claiming of channels on client
+    await this._plugin.disconnect()
+
+    // Unload all accounts: stop channel watcher and perform garbage collection
+    for (const account of this._accounts.values()) {
+      account.unload()
+    }
+
     // Persist store if there are any pending write operations
     await this._store.close()
-    return this._plugin.disconnect()
   }
 
   isConnected () {
@@ -227,18 +313,30 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
   }
 
   registerDataHandler (dataHandler: DataHandler) {
+    if (this._dataHandler !== defaultDataHandler) {
+      throw new Error('request handler already registered')
+    }
+
+    this._dataHandler = dataHandler
     return this._plugin.registerDataHandler(dataHandler)
   }
 
   deregisterDataHandler () {
+    this._dataHandler = defaultDataHandler
     return this._plugin.deregisterDataHandler()
   }
 
   registerMoneyHandler (moneyHandler: MoneyHandler) {
+    if (this._moneyHandler !== defaultMoneyHandler) {
+      throw new Error('money handler already registered')
+    }
+
+    this._moneyHandler = moneyHandler
     return this._plugin.registerMoneyHandler(moneyHandler)
   }
 
   deregisterMoneyHandler () {
+    this._moneyHandler = defaultMoneyHandler
     return this._plugin.deregisterMoneyHandler()
   }
 }

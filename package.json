@@ -1,6 +1,6 @@
 {
   "name": "ilp-plugin-ethereum",
-  "version": "3.0.0-beta.7",
+  "version": "3.0.0-beta.8",
   "description": "Settle Interledger payments with ether and ERC-20 tokens",
   "main": "index.js",
   "types": "build/index.d.ts",
@@ -8,13 +8,14 @@
     "tag": "next"
   },
   "files": [
-    "build/**/*"
+    "build",
+    "!build/__tests__"
   ],
   "scripts": {
     "build": "tsc",
     "lint": "tslint --project .",
     "test": "nyc ava",
-    "test-inspect": "node --inspect node_modules/ava/profile.js"
+    "test-inspect": "node --inspect-brk node_modules/ava/profile.js"
   },
   "repository": {
     "type": "git",
@@ -41,24 +42,25 @@
   "dependencies": {
     "@types/ethereumjs-util": "^5.2.0",
     "@types/web3": "^1.0.5",
-    "axios": "^0.18.0",
     "bignumber.js": "^7.2.1",
-    "btp-packet": "^1.2.1",
+    "btp-packet": "^2.1.0",
     "debug": "^4.0.0",
     "ethereumjs-util": "^5.2.0",
-    "eventemitter2": "^5.0.1",
+    "eventemitter3": "^3.1.0",
     "ilp-logger": "^1.0.2",
-    "ilp-packet": "^3.0.0",
+    "ilp-packet": "^3.0.4",
     "ilp-plugin-btp": "^1.3.2",
-    "ilp-plugin-mini-accounts": "^3.5.2",
+    "ilp-plugin-mini-accounts": "^4.0.0",
+    "p-queue": "^3.0.0",
     "web3": "1.0.0-beta.36"
   },
   "devDependencies": {
     "@types/get-port": "^4.0.0",
+    "@types/p-queue": "^2.3.1",
     "ava": "^1.0.0-rc.1",
     "codecov": "^3.1.0",
     "get-port": "^4.0.0",
-    "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#ko-receive-only",
+    "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#ko-receive-only-tests",
     "nyc": "^13.0.1",
     "standard": "^11.0.1",
     "ts-node": "^7.0.1",

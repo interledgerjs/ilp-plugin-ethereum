@@ -1,61 +1,29 @@
-import Web3 = require('web3')
-import * as IlpStream from 'ilp-protocol-stream'
-import * as getPort from 'get-port'
-import axios from 'axios'
+import {
+  createConnection,
+  createServer,
+  DataAndMoneyStream
+} from 'ilp-protocol-stream'
+import getPort from 'get-port'
 import EthereumPlugin from '..'
 import { convert, Unit } from '../account'
 import BigNumber from 'bignumber.js'
 import test from 'ava'
+import Web3 from 'web3'
 
 test('client streams data and money to server', async t => {
-  const web3 = new Web3(process.env.ETHEREUM_PROVIDER!)
-
-  const privateKeys = [
-    process.env.PRIVATE_KEY_A!,
-    process.env.PRIVATE_KEY_B!
-  ] as string[]
-
-  const addresses = privateKeys.map(key => web3.eth.accounts.wallet.add(key).address)
-
-  for (let address of addresses) {
-    // If the balance of the account goes below 5 ETH, top up from faucet
-    const balance = await web3.eth.getBalance(address)
-    if (convert(5, Unit.Eth, Unit.Wei).gt(balance.toString())) {
-      const { data } = await axios.post(`https://faucet.metamask.io/`, address, {
-        headers: {
-          'Content-Type': 'application/rawdata'
-        }
-      })
-
-      // MetaMask faucet returns the tx hash
-      if (typeof data === 'string') {
-        await new Promise(resolve => {
-          // Check for the tx to be mined
-          const interval = setInterval(async () => {
-            const receipt = await web3.eth.getTransactionReceipt(data)
-
-            if (receipt && receipt.status) {
-              clearInterval(interval)
-              resolve()
-            }
-          }, 1000)
-        })
-      }
-    }
-  }
-
   const AMOUNT_TO_SEND = convert('0.0023', Unit.Eth, Unit.Gwei)
   const SENDER_MAX_PREFUND = convert('0.001', Unit.Eth, Unit.Gwei)
   const INCOMING_FEE = convert('0.00018', Unit.Eth, Unit.Gwei)
   const RECEIVER_MAX_BALANCE = 0
+
+  const ethereumProvider = new Web3.providers.HttpProvider(process.env.ETHEREUM_PROVIDER!)
 
   const port = await (getPort() as Promise<number>)
 
   const clientPlugin = new EthereumPlugin({
     role: 'client',
     ethereumPrivateKey: process.env.PRIVATE_KEY_A!,
-    ethereumProvider: process.env.ETHEREUM_PROVIDER!,
-    // @ts-ignore
+    ethereumProvider,
     server: `btp+ws://userA:secretA@localhost:${port}`,
     outgoingChannelAmount: convert('0.002', Unit.Eth, Unit.Gwei),
     balance: {
@@ -68,8 +36,7 @@ test('client streams data and money to server', async t => {
   const serverPlugin = new EthereumPlugin({
     role: 'server',
     ethereumPrivateKey: process.env.PRIVATE_KEY_B!,
-    ethereumProvider: process.env.ETHEREUM_PROVIDER!,
-    // @ts-ignore
+    ethereumProvider,
     debugHostIldcpInfo: {
       assetCode: 'ETH',
       assetScale: 9,
@@ -86,7 +53,7 @@ test('client streams data and money to server', async t => {
   let actualReceived = new BigNumber(0)
 
   clientPlugin.registerMoneyHandler(Promise.resolve)
-  serverPlugin.registerMoneyHandler((amount: string) => {
+  serverPlugin.registerMoneyHandler(async (amount: string) => {
     actualReceived = actualReceived.plus(amount)
   })
 
@@ -94,45 +61,35 @@ test('client streams data and money to server', async t => {
   await clientPlugin.connect()
 
   // Setup the receiver (Ethereum server, Stream server)
-  const streamServer = await IlpStream.createServer({
+  const streamServer = await createServer({
     plugin: serverPlugin,
     receiveOnly: true
   })
 
-  let serverStream: IlpStream.DataAndMoneyStream
-  let serverConn: IlpStream.Connection
-  let clientConn: IlpStream.Connection
+  const connProm = streamServer.acceptConnection()
 
-  await new Promise(async resolve => {
-    streamServer.once('connection', (conn: IlpStream.Connection) => {
-      serverConn = conn
-
-      serverConn.once('stream', (stream: IlpStream.DataAndMoneyStream) => {
-        stream.setReceiveMax(Infinity)
-        serverStream = stream
-
-        resolve()
-      })
-    })
-
-    // Setup the sender (Ethereum client, Stream client)
-    clientConn = await IlpStream.createConnection({
-      plugin: clientPlugin,
-      ...(streamServer.generateAddressAndSecret())
-    })
-
-    const clientStream = clientConn.createStream()
-    clientStream.setSendMax(AMOUNT_TO_SEND)
+  // Setup the sender (Ethereum client, Stream client)
+  const clientConn = await createConnection({
+    plugin: clientPlugin,
+    ...(streamServer.generateAddressAndSecret())
   })
 
-  serverStream!.on('money', () => {
+  const clientStream = clientConn.createStream()
+  clientStream.setSendMax(AMOUNT_TO_SEND)
+
+  const serverConn = await connProm
+  const serverStream = await new Promise<DataAndMoneyStream>(resolve => {
+    serverConn.once('stream', resolve)
+  })
+
+  serverStream.on('money', () => {
     const amountPrefunded = actualReceived.minus(serverConn.totalReceived)
 
     t.true(amountPrefunded.gte(RECEIVER_MAX_BALANCE), 'amount prefunded to server is always at least the max balance')
     t.true(amountPrefunded.lte(SENDER_MAX_PREFUND), 'amount prefunded to server is never greater than settleTo amount')
   })
 
-  await t.notThrowsAsync(serverStream!.receiveTotal(AMOUNT_TO_SEND, {
+  await t.notThrowsAsync(serverStream.receiveTotal(AMOUNT_TO_SEND, {
     timeout: 360000
   }), 'client streamed the total amount of packets to the server')
 
@@ -143,5 +100,5 @@ test('client streams data and money to server', async t => {
 
   t.true(actualReceived.gte(AMOUNT_TO_SEND.minus(INCOMING_FEE)), 'server received at least as much money as the client sent')
 
-  await clientConn!.end()
+  await clientConn.end()
 })

@@ -1,7 +1,8 @@
 {
   "compilerOptions": {
-    "rootDir": "./src",
-    "outDir": "./build",
+    "baseUrl": "src",
+    "rootDir": "src",
+    "outDir": "build",
     "target": "es2017",
     "module": "commonjs",
     "moduleResolution": "node",
@@ -11,11 +12,6 @@
     // "strict": true /* Enable all strict type-checking options. */,
     "strictNullChecks": true,
     "resolveJsonModule": true,
-  },
-  "include": [
-    "src"
-  ],
-  "exclude": [
-    "src/__tests__"
-  ]
+    "esModuleInterop": true
+  }
 }

@@ -1,14 +1,15 @@
-import Web3 = require('web3')
+import Web3 from 'web3'
 import { TransactionObject } from 'web3/eth/types'
 import BigNumber from 'bignumber.js'
 import { randomBytes } from 'crypto'
 import { promisify } from 'util'
+import IContract from 'web3/eth/contract'
 
-import * as UNIDIRECTIONAL_MAINNET from '../abi/Unidirectional-mainnet.json'
-import * as UNIDIRECTIONAL_TESTNET from '../abi/Unidirectional-testnet.json'
+import UNIDIRECTIONAL_MAINNET from '../abi/Unidirectional-mainnet.json'
+import UNIDIRECTIONAL_TESTNET from '../abi/Unidirectional-testnet.json'
 
 const NETWORKS: {
-  [index: number]: Network
+  [index: number]: INetwork
 } = {
   // Mainnet
   1: {
@@ -40,30 +41,30 @@ const NETWORKS: {
   }
 }
 
-export interface Network {
+export interface INetwork {
   unidirectional: {
     address: string
     abi: typeof UNIDIRECTIONAL_MAINNET | typeof UNIDIRECTIONAL_TESTNET
   }
 }
 
-export interface Channel {
+export interface IChannel {
   channelId: string
   receiver: string
   sender: string
+  value: BigNumber
   settlingPeriod: BigNumber
   // settlingUntil is defined if channel is settling; otherwise, the channel is open
   settlingUntil?: BigNumber
-  value: BigNumber
 }
 
-export interface Claim {
+export interface IClaim {
   channelId: string,
   value: string,
   signature: string
 }
 
-export interface Tx {
+export interface ITx {
   nonce?: string | number
   chainId?: string | number
   to?: string
@@ -77,7 +78,7 @@ export interface Tx {
 export const generateChannelId = async () =>
   '0x' + (await promisify(randomBytes)(32)).toString('hex')
 
-export const getNetwork = async (web3: Web3): Promise<Network> => {
+export const getNetwork = async (web3: Web3): Promise<INetwork> => {
   const chainId = await web3.eth.net.getId()
   const network = NETWORKS[chainId]
 
@@ -88,24 +89,22 @@ export const getNetwork = async (web3: Web3): Promise<Network> => {
   return network
 }
 
-export const getContract = async (web3: Web3) => {
-  const network = await getNetwork(web3)
+export const getContract = (web3: Web3, network: INetwork) => {
   return new web3.eth.Contract(
     network.unidirectional.abi,
     network.unidirectional.address
   )
 }
 
-export const fetchChannel = async (web3: Web3, channelId: string): Promise<Channel | null> => {
+export const fetchChannel = async (contract: IContract, channelId: string): Promise<IChannel | undefined> => {
   try {
-    const contract = await getContract(web3)
     let {
       sender, receiver, settlingUntil, settlingPeriod, value
     } = await contract.methods.channels(channelId).call()
 
     // Minimic the check done at the contract level (check for empty address 0x00000...)
-    if (web3.utils.toBN(sender).isZero()) {
-      return null
+    if (new BigNumber(sender).isZero()) {
+      return
     }
 
     // In contract, `settlingUntil` should be positive if settling, 0 if open (contract checks if settlingUntil != 0)
@@ -131,7 +130,7 @@ export const generateTx = async ({ web3, txObj, from, value = 0 }: {
   txObj: TransactionObject<any>
   from: string
   value?: BigNumber.Value
-}): Promise<Tx> => {
+}): Promise<ITx> => {
   const tx = {
     from,
     data: txObj.encodeABI(),
@@ -144,5 +143,5 @@ export const generateTx = async ({ web3, txObj, from, value = 0 }: {
   return { ...tx, gas, gasPrice }
 }
 
-export const isSettling = (channel: Channel): boolean =>
+export const isSettling = (channel: IChannel): boolean =>
   !!channel.settlingUntil
