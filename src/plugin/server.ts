@@ -4,7 +4,7 @@ import MiniAccountsPlugin from 'ilp-plugin-mini-accounts'
 import { ServerOptions } from 'ws'
 import { IldcpResponse } from 'ilp-protocol-ildcp'
 import { BtpPacket, BtpSubProtocol } from 'ilp-plugin-btp'
-import { IlpPacket } from 'ilp-packet'
+import { IlpPacket, IlpPrepare, Type } from 'ilp-packet'
 
 export interface MiniAccountsOpts {
   port?: number
@@ -52,11 +52,14 @@ export class EthereumServerPlugin extends MiniAccountsPlugin implements PluginIn
     return this.getAccount(from).handleMoney(message)
   }
 
-  // @ts-ignore TODO Different version of ilp-packet used in mini-accounts
   _handlePrepareResponse = async (
     destination: string,
     responsePacket: IlpPacket,
-    preparePacket: IlpPacket
+    preparePacket: {
+      type: Type.TYPE_ILP_PREPARE,
+      typeString?: 'ilp_prepare',
+      data: IlpPrepare
+    }
   ) => {
     return this.getAccount(destination).handlePrepareResponse(preparePacket, responsePacket)
   }

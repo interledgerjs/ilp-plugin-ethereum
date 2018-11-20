@@ -10,7 +10,14 @@ import {
 import BigNumber from 'bignumber.js'
 import { DataHandler, MoneyHandler } from './utils/types'
 import { BtpPacket, BtpPacketData, BtpSubProtocol } from 'ilp-plugin-btp'
-import * as IlpPacket from 'ilp-packet'
+import {
+  Type,
+  IlpPrepare,
+  IlpPacket,
+  Errors,
+  errorToReject,
+  deserializeIlpPrepare
+} from 'ilp-packet'
 import EthereumPlugin from '.'
 import { randomBytes } from 'crypto'
 import { promisify } from 'util'
@@ -598,13 +605,13 @@ export default class EthereumAccount {
 
     // Handle incoming ILP PREPARE packets from peer
     // plugin-btp handles correlating the response packets for the dataHandler
-    if (ilp && ilp.data[0] === IlpPacket.Type.TYPE_ILP_PREPARE) {
+    if (ilp && ilp.data[0] === Type.TYPE_ILP_PREPARE) {
       try {
-        const { expiresAt, amount } = IlpPacket.deserializeIlpPrepare(ilp.data)
+        const { amount } = deserializeIlpPrepare(ilp.data)
         const amountBN = new BigNumber(amount)
 
         if (amountBN.gt(this.master._maxPacketAmount)) {
-          throw new IlpPacket.Errors.AmountTooLargeError('Packet size is too large.', {
+          throw new Errors.AmountTooLargeError('Packet size is too large.', {
             receivedAmount: amount,
             maximumAmount: this.master._maxPacketAmount.toString()
           })
@@ -614,33 +621,14 @@ export default class EthereumAccount {
           this.addBalance(amountBN)
         } catch (err) {
           this.master._log.trace(`Failed to forward PREPARE: ${err.message}`)
-          throw new IlpPacket.Errors.InsufficientLiquidityError(err.message)
+          throw new Errors.InsufficientLiquidityError(err.message)
         }
 
-        let timer: NodeJS.Timer
-        let response: Buffer = await Promise.race([
-          // Send reject if PREPARE expires before a response is received
-          new Promise<Buffer>(resolve => {
-            timer = setTimeout(() => {
-              resolve(
-                // Opinion: the triggeredBy address isn't useful because upstream connectors can modify
-                // it without any way for downstream nodes to know (even if we trust our direct peers)
-                IlpPacket.errorToReject('', {
-                  ilpErrorCode: 'R00',
-                  message: `Expired at ${new Date().toISOString()}`
-                })
-              )
-            }, expiresAt.getTime() - Date.now())
-          }),
-          // Forward the packet to data handler, wait for response
-          this.dataHandler(ilp.data)
-        ])
-        // tslint:disable-next-line:no-unnecessary-type-assertion
-        clearTimeout(timer!)
+        const response = await this.dataHandler(ilp.data)
 
-        if (response[0] === IlpPacket.Type.TYPE_ILP_REJECT) {
+        if (response[0] === Type.TYPE_ILP_REJECT) {
           this.subBalance(amountBN)
-        } else if (response[0] === IlpPacket.Type.TYPE_ILP_FULFILL) {
+        } else if (response[0] === Type.TYPE_ILP_FULFILL) {
           this.master._log.trace(`Received FULFILL from data handler in response to forwarded PREPARE`)
         }
 
@@ -653,7 +641,7 @@ export default class EthereumAccount {
         return [{
           protocolName: 'ilp',
           contentType: MIME_APPLICATION_OCTET_STREAM,
-          data: IlpPacket.errorToReject('', err)
+          data: errorToReject('', err)
         }]
       }
     }
@@ -795,10 +783,12 @@ export default class EthereumAccount {
   }
 
   // Handle the response from a forwarded ILP PREPARE
-  handlePrepareResponse (preparePacket: IlpPacket.IlpPacket, responsePacket: IlpPacket.IlpPacket): void {
-    const isFulfill = responsePacket.type === IlpPacket.Type.TYPE_ILP_FULFILL
-    const isReject = responsePacket.type === IlpPacket.Type.TYPE_ILP_REJECT
-
+  handlePrepareResponse (preparePacket: {
+    type: Type.TYPE_ILP_PREPARE,
+    typeString?: 'ilp_prepare',
+    data: IlpPrepare
+  }, responsePacket: IlpPacket): void {
+    const isFulfill = responsePacket.type === Type.TYPE_ILP_FULFILL
     if (isFulfill) {
       this.master._log.trace(`Received a FULFILL in response to the forwarded PREPARE from sendData`)
 
@@ -810,12 +800,13 @@ export default class EthereumAccount {
       } catch (err) {
         // Balance update likely dropped below the minimum, so throw an internal error
         this.master._log.trace(`Failed to fulfill response to PREPARE: ${err.message}`)
-        throw new IlpPacket.Errors.InternalError(err.message)
+        throw new Errors.InternalError(err.message)
       }
     }
 
     // Attempt to settle on fulfills and* T04s (to resolve stalemates)
-    const shouldSettle = isFulfill || (isReject && responsePacket.data.code === 'T04')
+    const shouldSettle = isFulfill ||
+      (responsePacket.type === Type.TYPE_ILP_REJECT && responsePacket.data.code === 'T04')
     if (shouldSettle) {
       this.attemptSettle().catch((err: Error) => {
         this.master._log.trace(`Error queueing an outgoing settlement: ${err.message}`)

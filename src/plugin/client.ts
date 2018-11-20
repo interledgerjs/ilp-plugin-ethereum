@@ -9,7 +9,7 @@ import {
   MIME_APPLICATION_OCTET_STREAM
 } from 'btp-packet'
 import { PluginInstance, PluginServices } from '../utils/types'
-import { deserializeIlpPacket } from 'ilp-packet'
+import { deserializeIlpPacket, Type } from 'ilp-packet'
 
 export interface EthereumClientOpts extends IlpPluginBtpConstructorOptions {
   getAccount: (accountName: string) => EthereumAccount
@@ -51,6 +51,9 @@ export class EthereumClientPlugin extends BtpPlugin implements PluginInstance {
   // balance updates and settlement, akin to mini-accounts
   async sendData (buffer: Buffer): Promise<Buffer> {
     const preparePacket = deserializeIlpPacket(buffer)
+    if (preparePacket.type !== Type.TYPE_ILP_PREPARE) {
+      throw new Error('Packet must be a PREPARE')
+    }
 
     const response = await this._call('', {
       type: TYPE_MESSAGE,
