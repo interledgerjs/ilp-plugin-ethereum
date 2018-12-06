@@ -77,6 +77,7 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
   private readonly _plugin: EthereumClientPlugin | EthereumServerPlugin
   // Public so they're accessible to internal account class
   readonly _ethereumAddress: string
+  readonly _privateKey: string
   readonly _web3: Web3
   readonly _settleOnConnect: boolean
   readonly _closeOnDisconnect: boolean
@@ -147,7 +148,7 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
 
     this._web3 = new Web3(ethereumProvider)
     this._ethereumAddress = this._web3.eth.accounts.wallet.add(ethereumPrivateKey).address
-
+    this._privateKey = ethereumPrivateKey.slice(2)
     this._store = new StoreWrapper(store)
 
     this._log = log || createLogger(`ilp-plugin-ethereum-${role}`)
