@@ -20,6 +20,9 @@ import {
 } from 'ilp-packet'
 import EthereumPlugin from '.'
 import { randomBytes } from 'crypto'
+import { sign as ethSign, recover as ethRecover } from 'eth-crypto'
+import { SIGN_PREFIX } from 'eth-crypto/dist/lib/hash'
+import { keccak256 } from 'js-sha3'
 import { promisify } from 'util'
 import {
   IClaim,
@@ -532,8 +535,11 @@ export default class EthereumAccount {
 
       const contractAddress = this.master._network!.unidirectional.address
       const paymentDigest = Web3.utils.soliditySha3(contractAddress, channelId, value.toString())
-      const signature = await this.master._web3.eth.sign(paymentDigest, channel.sender)
-
+      const paymentDigestBuffer = Buffer.from(Web3.utils.hexToBytes(paymentDigest))
+      const ethPaymentDigest = Buffer.concat([
+        Buffer.from(SIGN_PREFIX), paymentDigestBuffer
+      ])
+      const signature = ethSign(this.master._privateKey, keccak256(ethPaymentDigest))
       const claim = {
         channelId,
         signature,
@@ -698,7 +704,11 @@ export default class EthereumAccount {
 
           const contractAddress = this.master._network!.unidirectional.address
           const paymentDigest = Web3.utils.soliditySha3(contractAddress, claim.channelId, claim.value)
-          const senderAddress = this.master._web3.eth.accounts.recover(paymentDigest, claim.signature)
+          const paymentDigestBuffer = Buffer.from(Web3.utils.hexToBytes(paymentDigest))
+          const ethPaymentDigest = Buffer.concat([
+            Buffer.from(SIGN_PREFIX), paymentDigestBuffer
+          ])
+          const senderAddress = ethRecover(claim.signature, keccak256(ethPaymentDigest))
           const isValidSignature = senderAddress === channel.sender
           if (!isValidSignature) {
             throw new Error(`signature is invalid, or sender is using contracts on a different network`)
