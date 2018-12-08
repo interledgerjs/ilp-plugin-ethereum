@@ -21,6 +21,7 @@ import {
 import EthereumPlugin from '.'
 import { randomBytes } from 'crypto'
 import { sign as ethSign, recover as ethRecover } from 'eth-crypto'
+// @ts-ignore
 import { SIGN_PREFIX } from 'eth-crypto/dist/lib/hash'
 import { keccak256 } from 'js-sha3'
 import { promisify } from 'util'
@@ -33,7 +34,7 @@ import {
   fetchChannel
 } from './utils/contract'
 import Queue from 'p-queue'
-import EventEmitter from 'eventemitter3'
+import { EventEmitter2 } from 'eventemitter2'
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 
@@ -196,11 +197,9 @@ export default class EthereumAccount {
   }
 
   async connect () {
-    if (this.master._settleOnConnect) {
-      return this.attemptSettle().catch((err: Error) => {
-        this.master._log.trace(`Error queueing an outgoing settlement: ${err.message}`)
-      })
-    }
+    return this.attemptSettle().catch((err: Error) => {
+      this.master._log.trace(`Error queueing an outgoing settlement: ${err.message}`)
+    })
   }
 
   // Inform the peer what address this instance should be paid at
@@ -281,11 +280,8 @@ export default class EthereumAccount {
    */
   async attemptSettle (): Promise<void> {
     return this.queue.add(async () => {
-      const settleThreshold = this.master._balance.settleThreshold
-
-      // Don't settle in "receive only" mode (no settle threshold configured)
-      const shouldSettle = settleThreshold
-        && settleThreshold.gt(this.account.balance)
+      // By default, the settleThreshold is -Infinity, so it will never settle (receive-only mode)
+      const shouldSettle = this.master._balance.settleThreshold.gt(this.account.balance)
         && this.account.payoutAmount.gt(0)
 
       if (!shouldSettle) {
@@ -324,7 +320,7 @@ export default class EthereumAccount {
         // 3) Try to send a claim again since we may have more funds in the channel
         .then(checkBudget(leftover => this.sendClaim(leftover)))
         // Guard against the amount leftover (to be refunded!) going above the initial budget
-        .then(l => BigNumber.min(l, budget))
+        .then(leftover => BigNumber.min(leftover, budget))
         // If there's an error, assume the entire amount was spent
         .catch((err: Error) => {
           this.master._log.error(`Error during outgoing settlement: ${err.message}`)
@@ -415,7 +411,7 @@ export default class EthereumAccount {
         settlementBudget = settlementBudget.minus(txFee)
 
         this.master._log.trace(`Opening channel for ${format(value, Unit.Wei)} and fee of ${format(txFee, Unit.Wei)} with ${this.account.accountName}`)
-        const emitter = this.master._web3.eth.sendTransaction(tx) as unknown as EventEmitter
+        const emitter = this.master._web3.eth.sendTransaction(tx) as unknown as EventEmitter2
 
         await new Promise(resolve => {
           emitter.on('confirmation', (confNumber: number, receipt: TransactionReceipt) => {
@@ -460,7 +456,7 @@ export default class EthereumAccount {
         settlementBudget = settlementBudget.minus(txFee)
 
         this.master._log.trace(`Depositing ${format(txFee, Unit.Wei)} to channel for fee of ${format(txFee, Unit.Wei)} with account ${this.account.accountName}`)
-        const emitter = this.master._web3.eth.sendTransaction(tx) as unknown as EventEmitter
+        const emitter = this.master._web3.eth.sendTransaction(tx) as unknown as EventEmitter2
 
         await new Promise(resolve => {
           emitter.on('confirmation', (confNumber: number, receipt: TransactionReceipt) => {
