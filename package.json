@@ -62,7 +62,7 @@
     "ava": "^1.0.0-rc.1",
     "codecov": "^3.1.0",
     "get-port": "^4.0.0",
-    "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#ko-receive-only-tests",
+    "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#3fe1f02273c8ac60927d902c7a88c45111c5699b",
     "nyc": "^13.0.1",
     "standard": "^11.0.1",
     "ts-node": "^7.0.1",
