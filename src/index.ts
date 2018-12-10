@@ -13,6 +13,12 @@ import debug from 'debug'
 import createLogger from 'ilp-logger'
 import { INetwork, getNetwork, getContract } from './utils/contract'
 import { BtpPacket, IlpPluginBtpConstructorOptions } from 'ilp-plugin-btp'
+import { registerProtocolNames } from 'btp-packet'
+
+registerProtocolNames([
+  'machinomy',
+  'requestClose'
+])
 
 BigNumber.config({ EXPONENTIAL_AT: 1e+9 }) // Almost never use exponential notation
 
@@ -34,9 +40,6 @@ export interface EthereumPluginOpts extends MiniAccountsOpts, IlpPluginBtpConstr
   // Provider to connect to a given Ethereum node
   // https://web3js.readthedocs.io/en/1.0/web3.html#providers
   ethereumProvider?: string | IProvider
-  // Should the plugin immediately attempt to settle with its peer on connect?
-  // - Default for clients is `true`; default for servers and direct peers is `false`
-  settleOnConnect?: boolean
   // Should incoming channels to all accounts on the plugin be claimed whenever disconnect is called on the plugin?
   // - Default for clients is `true`; default for servers and direct peers is `false`
   closeOnDisconnect?: boolean
@@ -79,7 +82,6 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
   readonly _ethereumAddress: string
   readonly _privateKey: string
   readonly _web3: Web3
-  readonly _settleOnConnect: boolean
   readonly _closeOnDisconnect: boolean
   readonly _outgoingChannelAmount: BigNumber // wei
   readonly _incomingChannelFee: BigNumber // wei
@@ -89,7 +91,7 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
   readonly _balance: { // gwei
     maximum: BigNumber
     settleTo: BigNumber
-    settleThreshold?: BigNumber
+    settleThreshold: BigNumber
     minimum: BigNumber
   }
   readonly _accounts = new Map<string, EthereumAccount>() // accountName -> account
@@ -105,7 +107,6 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
     role = 'client',
     ethereumPrivateKey,
     ethereumProvider = 'wss://mainnet.infura.io/ws',
-    settleOnConnect = role === 'client' /* By default, if client, settle initially & claim on disconnect */,
     closeOnDisconnect = role === 'client',
     outgoingChannelAmount = convert('0.04', Unit.Eth, Unit.Gwei),
     incomingChannelFee = 0,
@@ -119,7 +120,7 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
     balance: {
       maximum = Infinity,
       settleTo = 0,
-      settleThreshold = undefined,
+      settleThreshold = -Infinity,
       minimum = -Infinity
     } = {},
     channelWatcherInterval = new BigNumber(60 * 1000), // By default, every 60 seconds
@@ -154,7 +155,6 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
     this._log = log || createLogger(`ilp-plugin-ethereum-${role}`)
     this._log.trace = this._log.trace || debug(`ilp-plugin-ethereum-${role}:trace`)
 
-    this._settleOnConnect = settleOnConnect
     this._closeOnDisconnect = closeOnDisconnect
 
     this._outgoingChannelAmount = convert(outgoingChannelAmount, Unit.Gwei, Unit.Wei)
@@ -180,31 +180,28 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
         .dp(0, BigNumber.ROUND_FLOOR),
       settleTo: new BigNumber(settleTo)
         .dp(0, BigNumber.ROUND_FLOOR),
-      settleThreshold: settleThreshold
-        ? new BigNumber(settleThreshold)
-          .dp(0, BigNumber.ROUND_FLOOR)
-        : undefined,
+      settleThreshold: new BigNumber(settleThreshold)
+        .dp(0, BigNumber.ROUND_FLOOR),
       minimum: new BigNumber(minimum)
         .dp(0, BigNumber.ROUND_CEIL)
     }
 
-    // Validate balance configuration: max >= settleTo >= settleThreshold >= min
-    if (this._balance.settleThreshold) {
-      if (!this._balance.maximum.gte(this._balance.settleTo)) {
-        throw new Error('Invalid balance configuration: maximum balance must be greater than or equal to settleTo')
-      }
-      if (!this._balance.settleTo.gte(this._balance.settleThreshold)) {
-        throw new Error('Invalid balance configuration: settleTo must be greater than or equal to settleThreshold')
-      }
-      if (!this._balance.settleThreshold.gte(this._balance.minimum)) {
-        throw new Error('Invalid balance configuration: settleThreshold must be greater than or equal to minimum balance')
-      }
-    } else {
-      if (!this._balance.maximum.gt(this._balance.minimum)) {
-        throw new Error('Invalid balance configuration: maximum balance must be greater than minimum balance')
-      }
+    if (this._balance.settleThreshold.eq(this._balance.minimum)) {
+      this._log.trace(`Auto-settlement disabled: plugin is in receive-only mode`)
+    }
 
-      this._log.trace(`Auto-settlement disabled: plugin is in receive-only mode since no settleThreshold was configured`)
+    // Validate balance configuration: max >= settleTo >= settleThreshold >= min
+    if (!this._balance.maximum.gte(this._balance.settleTo)) {
+      throw new Error('Invalid balance configuration: maximum balance must be greater than or equal to settleTo')
+    }
+    if (!this._balance.settleTo.gte(this._balance.settleThreshold)) {
+      throw new Error('Invalid balance configuration: settleTo must be greater than or equal to settleThreshold')
+    }
+    if (!this._balance.settleThreshold.gte(this._balance.minimum)) {
+      throw new Error('Invalid balance configuration: settleThreshold must be greater than or equal to the minimum balance')
+    }
+    if (!this._balance.maximum.gt(this._balance.minimum)) {
+      throw new Error('Invalid balance configuration: maximum balance should be greater than minimum balance')
     }
 
     this._channelWatcherInterval = new BigNumber(channelWatcherInterval)
