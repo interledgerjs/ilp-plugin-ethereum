@@ -198,7 +198,7 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
       throw new Error('Invalid balance configuration: settleTo must be greater than or equal to settleThreshold')
     }
     if (!this._balance.settleThreshold.gte(this._balance.minimum)) {
-      throw new Error('Invalid balance configuration: settleThreshold must be greater than or equal to minimum')
+      throw new Error('Invalid balance configuration: settleThreshold must be greater than or equal to the minimum balance')
     }
     if (!this._balance.maximum.gt(this._balance.minimum)) {
       throw new Error('Invalid balance configuration: maximum balance should be greater than minimum balance')
