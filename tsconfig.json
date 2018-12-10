@@ -9,8 +9,7 @@
     "sourceMap": true,
     "declaration": true,
     "removeComments": true,
-    // "strict": true /* Enable all strict type-checking options. */,
-    "strictNullChecks": true,
+    "strict": true /* Enable all strict type-checking options. */,
     "resolveJsonModule": true,
     "esModuleInterop": true
   }
