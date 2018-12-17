@@ -125,10 +125,10 @@ export const fetchChannel = async (contract: IContract, channelId: string): Prom
   }
 }
 
-export const generateTx = async ({ web3, txObj, from, value = 0 }: {
-  web3: Web3
+export const generateTx = async ({ txObj, from, gasPrice, value = 0 }: {
   txObj: TransactionObject<any>
   from: string
+  gasPrice: number
   value?: BigNumber.Value
 }): Promise<ITx> => {
   const tx = {
@@ -137,10 +137,10 @@ export const generateTx = async ({ web3, txObj, from, value = 0 }: {
     value: '0x' + new BigNumber(value).toString(16)
   }
 
-  const gasPrice = await web3.eth.getGasPrice()
-  const gas = await txObj.estimateGas(tx)
-
-  return { ...tx, gas, gasPrice }
+  return {
+    ...tx, gasPrice,
+    gas: await txObj.estimateGas(tx)
+  }
 }
 
 export const isSettling = (channel: IChannel): boolean =>

@@ -72,7 +72,10 @@ export interface EthereumPluginOpts extends MiniAccountsOpts, IlpPluginBtpConstr
     // e.g. incoming money/claims and forwarding of FULFILL packets with credits that reduce balance below minimum would be rejected
     minimum?: BigNumber.Value
   },
-  channelWatcherInterval?: BigNumber.Value
+  // Number of ms between runs of the channel watcher to check if a dispute was started
+  channelWatcherInterval?: BigNumber.Value,
+  // Function to query the currenct gas price, if it was supplied
+  getGasPrice?: () => Promise<number>
 }
 
 export default class EthereumPlugin extends EventEmitter2 implements PluginInstance {
@@ -82,6 +85,7 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
   readonly _ethereumAddress: string
   readonly _privateKey: string
   readonly _web3: Web3
+  readonly _getGasPrice: () => Promise<number> // wei
   readonly _closeOnDisconnect: boolean
   readonly _outgoingChannelAmount: BigNumber // wei
   readonly _incomingChannelFee: BigNumber // wei
@@ -107,6 +111,7 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
     role = 'client',
     ethereumPrivateKey,
     ethereumProvider = 'wss://mainnet.infura.io/ws',
+    getGasPrice,
     closeOnDisconnect = role === 'client',
     outgoingChannelAmount = convert('0.04', Unit.Eth, Unit.Gwei),
     incomingChannelFee = 0,
@@ -150,6 +155,8 @@ export default class EthereumPlugin extends EventEmitter2 implements PluginInsta
     this._web3 = new Web3(ethereumProvider)
     this._ethereumAddress = this._web3.eth.accounts.wallet.add(ethereumPrivateKey).address
     this._privateKey = ethereumPrivateKey.slice(2)
+    this._getGasPrice = getGasPrice || (() => this._web3.eth.getGasPrice())
+
     this._store = new StoreWrapper(store)
 
     this._log = log || createLogger(`ilp-plugin-ethereum-${role}`)

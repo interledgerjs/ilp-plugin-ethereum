@@ -83,7 +83,8 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
   const address = web3.eth.accounts.wallet.add(process.env.PRIVATE_KEY_A!).address
 
   const txObj = contract.methods.startSettling(channelId)
-  const tx = await generateTx({ web3, txObj, from: address })
+  const gasPrice = await web3.eth.getGasPrice()
+  const tx = await generateTx({ gasPrice, txObj, from: address })
 
   await web3.eth.sendTransaction(tx)
 
