@@ -396,9 +396,9 @@ export default class EthereumAccount {
           this.master._outgoingSettlementPeriod.toString()
         )
         const tx = await generateTx({
-          web3: this.master._web3,
+          txObj, value,
           from: this.master._ethereumAddress,
-          txObj, value
+          gasPrice: await this.master._getGasPrice()
         })
 
         const txFee = new BigNumber(tx.gasPrice).times(tx.gas)
@@ -441,9 +441,9 @@ export default class EthereumAccount {
         const channelId = this.account.outgoingChannelId!
         const txObj = this.master._contract!.methods.deposit(channelId)
         const tx = await generateTx({
-          web3: this.master._web3,
+          txObj, value,
           from: channel!.sender,
-          txObj, value
+          gasPrice: await this.master._getGasPrice()
         })
 
         const txFee = new BigNumber(tx.gasPrice).times(tx.gas)
@@ -873,7 +873,7 @@ export default class EthereumAccount {
       const tx = await generateTx({
         txObj,
         from: channel.receiver,
-        web3: this.master._web3
+        gasPrice: await this.master._getGasPrice()
       })
 
       // Check to verify it's profitable first

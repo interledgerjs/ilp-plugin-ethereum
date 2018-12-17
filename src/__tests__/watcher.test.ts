@@ -72,18 +72,18 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
   const network = await getNetwork(web3)
   const contract = getContract(web3, network)
 
-  // TODO web3.js beta 36 event bugs: https://github.com/ethereum/web3.js/issues/1916
-  // contract.events.DidClaim({
-  //   fromBlock: 'latest',
-  //   filter: { channelId }
-  // }).on('data', () => {
-  //   t.pass('successfully claimed settling channel')
-  // })
+  contract.events.DidClaim({
+    fromBlock: 'latest',
+    filter: { channelId }
+  }).on('data', () =>
+    t.pass('successfully claimed settling channel')
+  )
 
   const address = web3.eth.accounts.wallet.add(process.env.PRIVATE_KEY_A!).address
 
   const txObj = contract.methods.startSettling(channelId)
-  const tx = await generateTx({ web3, txObj, from: address })
+  const gasPrice = await web3.eth.getGasPrice()
+  const tx = await generateTx({ gasPrice, txObj, from: address })
 
   await web3.eth.sendTransaction(tx)
 

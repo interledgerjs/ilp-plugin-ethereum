@@ -54,12 +54,12 @@
     "ilp-plugin-mini-accounts": "^4.0.2",
     "js-sha3": "^0.8.0",
     "p-queue": "^3.0.0",
-    "web3": "1.0.0-beta.36"
+    "web3": "^1.0.0-beta.37"
   },
   "devDependencies": {
     "@types/get-port": "^4.0.0",
     "@types/p-queue": "^2.3.1",
-    "ava": "^1.0.0-rc.1",
+    "ava": "^1.0.1",
     "codecov": "^3.1.0",
     "get-port": "^4.0.0",
     "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#3fe1f02273c8ac60927d902c7a88c45111c5699b",
