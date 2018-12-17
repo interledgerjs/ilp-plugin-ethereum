@@ -1,6 +1,6 @@
 {
   "name": "ilp-plugin-ethereum",
-  "version": "3.0.0-beta.9",
+  "version": "3.0.0-beta.10",
   "description": "Settle Interledger payments with ether and ERC-20 tokens",
   "main": "index.js",
   "types": "build/index.d.ts",
