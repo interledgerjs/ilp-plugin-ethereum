@@ -18,7 +18,7 @@ test('client streams data and money to server', async t => {
 
   const ethereumProvider = new Web3.providers.HttpProvider(process.env.ETHEREUM_PROVIDER!)
 
-  const port = await (getPort() as Promise<number>)
+  const port = await getPort()
 
   const clientPlugin = new EthereumPlugin({
     role: 'client',

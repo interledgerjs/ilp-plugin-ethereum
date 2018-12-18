@@ -12,7 +12,7 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
   const ethereumProvider = new Web3.providers.HttpProvider(process.env.ETHEREUM_PROVIDER!)
   const web3 = new Web3(ethereumProvider)
 
-  const port = await (getPort() as Promise<number>)
+  const port = await getPort()
 
   const clientStore = new MemoryStore()
   const clientPlugin = new EthereumPlugin({

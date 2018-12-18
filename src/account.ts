@@ -16,7 +16,9 @@ import {
   IlpPacket,
   Errors,
   errorToReject,
-  deserializeIlpPrepare
+  deserializeIlpPrepare,
+  isFulfill,
+  isReject
 } from 'ilp-packet'
 import EthereumPlugin from '.'
 import { randomBytes } from 'crypto'
@@ -382,6 +384,11 @@ export default class EthereumAccount {
       // Only on-chain tx fees and outgoing payment channel claims should impact the settle amount
       const value = BigNumber.max(settlementBudget, this.master._outgoingChannelAmount)
 
+      if (!(requiresNewChannel || requiresDeposit)) {
+        this.master._log.trace(`No on-chain funding transaction required to settle ${format(settlementBudget, Unit.Wei)} with account ${this.account.accountName}`)
+        return settlementBudget
+      }
+
       if (requiresNewChannel) {
         await this.fetchEthereumAddress()
         if (!this.account.ethereumAddress) {
@@ -413,11 +420,11 @@ export default class EthereumAccount {
         this.master._log.trace(`Opening channel for ${format(value, Unit.Wei)} and fee of ${format(txFee, Unit.Wei)} with ${this.account.accountName}`)
         const emitter = this.master._web3.eth.sendTransaction(tx) as unknown as EventEmitter2
 
-        await new Promise(resolve => {
+        await new Promise((resolve, reject) => {
           emitter.on('confirmation', (confNumber: number, receipt: TransactionReceipt) => {
             if (!receipt.status) {
               this.master._log.error(`Failed to open channel: on-chain transaction reverted by the EVM`)
-              resolve()
+              reject()
             } else if (confNumber >= 1) {
               this.master._log.info(`Successfully opened new channel ${channelId} for ${format(value, Unit.Wei)} `
                 + `and linked to account ${this.account.accountName}`)
@@ -427,16 +434,29 @@ export default class EthereumAccount {
           })
 
           emitter.on('error', (err: Error) => {
-            // For safety, if the tx is reverted, wasn't mined, or less gas was used, DO NOT credit the client's account
+            // For safety, if the tx is reverted, wasn't mined, or less gas was used, DO NOT credit the peer's account
             this.master._log.error(`Failed to open channel: ${err.message}`)
-            resolve()
+            reject()
           })
         })
 
         emitter.removeAllListeners()
 
-        // Wait 2 seconds for block to propagate
-        await new Promise(resolve => setTimeout(resolve, 2000))
+        // Ensure that we've successfully fetched the channel details before sending a claim
+        const refreshChannel = async (attempts = 0) => {
+          if (attempts > 50) {
+            throw new Error('Unable to lookup newly opened channel after 50 attempts despite 1 block confirmation')
+          }
+
+          const channel = this.channelCache[channelId]
+            || await this.updateChannelCache(channelId)
+          if (!channel) {
+            await new Promise(r => setTimeout(r, 200))
+            await refreshChannel(attempts += 1)
+          }
+        }
+
+        await refreshChannel()
       } else if (requiresDeposit) {
         const channelId = this.account.outgoingChannelId!
         const txObj = this.master._contract!.methods.deposit(channelId)
@@ -458,11 +478,11 @@ export default class EthereumAccount {
         this.master._log.trace(`Depositing ${format(txFee, Unit.Wei)} to channel for fee of ${format(txFee, Unit.Wei)} with account ${this.account.accountName}`)
         const emitter = this.master._web3.eth.sendTransaction(tx) as unknown as EventEmitter2
 
-        await new Promise(resolve => {
+        await new Promise((resolve, reject) => {
           emitter.on('confirmation', (confNumber: number, receipt: TransactionReceipt) => {
             if (!receipt.status) {
               this.master._log.error(`Failed to deposit to channel: on-chain transaction reverted by the EVM`)
-              resolve()
+              reject()
             } else if (confNumber >= 1) {
               this.master._log.info(`Successfully deposited ${format(value, Unit.Wei)} to channel ${channelId} for account ${this.account.accountName}`)
               resolve()
@@ -470,24 +490,36 @@ export default class EthereumAccount {
           })
 
           emitter.on('error', (err: Error) => {
-            // For safety, if the tx is reverted, wasn't mined, or less gas was used, DO NOT credit the client's account
+            // For safety, if the tx is reverted, wasn't mined, or less gas was used, DO NOT credit the peer's account
             this.master._log.error(`Failed to open channel: ${err.message}`)
-            resolve()
+            reject()
           })
         })
 
         emitter.removeAllListeners()
 
-        // Wait 2 seconds for block to propagate
-        await new Promise(resolve => setTimeout(resolve, 2000))
-      } else {
-        this.master._log.trace(`No on-chain funding transaction required to settle ${format(settlementBudget, Unit.Wei)} with account ${this.account.accountName}`)
+        // Ensure that we've successfully fetched the updated channel details before sending a new claim
+        const refreshChannel = async (attempts = 0) => {
+          if (attempts > 50) {
+            throw new Error('Unable to lookup new channel details after 50 attempts despite 1 block confirmation')
+          }
+
+          const channel = this.channelCache[channelId]
+            || await this.updateChannelCache(channelId)
+          const updatedChannelValue = channel.value.eq(value)
+          if (!updatedChannelValue) {
+            await new Promise(r => setTimeout(r, 200))
+            await refreshChannel(attempts += 1)
+          }
+        }
+
+        await refreshChannel()
       }
     } catch (err) {
       this.master._log.error(`Failed to fund outgoing channel to ${this.account.accountName}: ${err.message}`)
-    } finally {
-      return settlementBudget
     }
+
+    return settlementBudget
   }
 
   private async sendClaim (settlementBudget: BigNumber): Promise<BigNumber> {
@@ -567,9 +599,9 @@ export default class EthereumAccount {
       )
     } catch (err) {
       this.master._log.error(`Failed to send claim to ${this.account.accountName}: ${err.message}`)
-    } finally {
-      return settlementBudget
     }
+
+    return settlementBudget
   }
 
   async handleData (message: BtpPacket): Promise<BtpSubProtocol[]> {
@@ -652,137 +684,164 @@ export default class EthereumAccount {
   }
 
   async handleMoney (message: BtpPacket): Promise<BtpSubProtocol[]> {
-    return this.queue.add(async () => {
-      try {
-        const machinomy = getSubprotocol(message, 'machinomy')
+    try {
+      const machinomy = getSubprotocol(message, 'machinomy')
+      if (machinomy) {
+        this.master._log.trace(`Handling Machinomy claim for account ${this.account.accountName}`)
 
-        if (machinomy) {
-          this.master._log.trace(`Handling Machinomy claim for account ${this.account.accountName}`)
+        const claim = JSON.parse(machinomy.data.toString())
 
-          const claim = JSON.parse(machinomy.data.toString())
-
-          const hasValidSchema = (o: any): o is IClaim =>
-            typeof o.value === 'string'
-              && typeof o.channelId === 'string'
-              && typeof o.signature === 'string'
-          if (!hasValidSchema(claim)) {
-            throw new Error(`claim schema is malformed`)
-          }
-
-          const oldClaim = this.account.bestIncomingClaim
-          const wrongChannel = oldClaim
-            // New claim is using different channel from the old claim
-            && oldClaim.channelId !== claim.channelId
-            // Old channel is still open (if it was closed, a new claim is acceptable)
-            && (await this.updateChannelCache(oldClaim.channelId))
-          if (wrongChannel) {
-            throw new Error(`account ${this.account.accountName} must use channel ${oldClaim!.channelId}`)
-          }
-
-          let channel: IChannel | undefined = this.channelCache[claim.channelId]
-          // Fetch channel state from network if:
-          // 1) No claim/channel is linked to the account
-          // 2) The channel isn't cached
-          // 3) Claim value is greater than cached channel value (e.g. possible on-chain deposit)
-          const shouldFetchChannel = !oldClaim || !channel
-            || new BigNumber(claim.value).gt(channel.value)
-          if (shouldFetchChannel) {
-            channel = await this.updateChannelCache(claim.channelId)
-          }
-
-          if (!channel) {
-            throw new Error(`channel ${claim.channelId} is already closed or doesn't exist`)
-          }
-
-          if (new BigNumber(claim.value).lte(0)) {
-            throw new Error(`value of claim is 0 or negative`)
-          }
-
-          const contractAddress = this.master._network!.unidirectional.address
-          const paymentDigest = Web3.utils.soliditySha3(contractAddress, claim.channelId, claim.value)
-          const paymentDigestBuffer = Buffer.from(Web3.utils.hexToBytes(paymentDigest))
-          const ethPaymentDigest = Buffer.concat([
-            Buffer.from(SIGN_PREFIX), paymentDigestBuffer
-          ])
-          const senderAddress = ethRecover(claim.signature, keccak256(ethPaymentDigest))
-          const isValidSignature = senderAddress === channel.sender
-          if (!isValidSignature) {
-            throw new Error(`signature is invalid, or sender is using contracts on a different network`)
-          }
-
-          const oldClaimValue = new BigNumber(oldClaim ? oldClaim.value : 0)
-          const newClaimValue = BigNumber.min(channel.value, claim.value)
-          let claimIncrement = newClaimValue.minus(oldClaimValue)
-          if (claimIncrement.eq(0)) {
-            this.master._log.trace(`Disregarding incoming claim: value of ${format(claim.value, Unit.Wei)} is same as previous claim`)
-            // Respond to the request normally, not with an error:
-            // Peer may have deposited to the channel and think it's confirmed, but we don't see it yet, causing them to send
-            // a claim value greater than the amount that's in the channel
-            return []
-          } else if (claimIncrement.lt(0)) {
-            throw new Error(`claim value of ${format(claim.value, Unit.Wei)} is less than previous claim for ${format(oldClaimValue, Unit.Wei)}`)
-          }
-
-          // If a new channel is being linked to the account, perform additional validation
-          const linkNewChannel = !oldClaim || claim.channelId !== oldClaim.channelId
-          if (linkNewChannel) {
-            // Each channel key is a mapping of channelId -> accountName to ensure no channel can be linked to multiple accounts
-            // No race condition: a new linked channel will be cached at the end of this closure
-            const channelKey = `${claim.channelId}:incoming-channel`
-            await this.master._store.load(channelKey)
-            const linkedAccount = this.master._store.get(channelKey)
-            const canLinkChannel = !linkedAccount || linkedAccount === this.account.accountName
-            if (!canLinkChannel) {
-              throw new Error(`channel ${claim.channelId} is already linked to a different account`)
-            }
-
-            // Check the channel is to the server's address
-            // (only check for new channels, not per claim, in case the server restarts and changes config)
-            const amReceiver = channel.receiver.toLowerCase() === this.master._ethereumAddress.toLowerCase()
-            if (!amReceiver) {
-              throw new Error(`the recipient for incoming channel ${claim.channelId} is not ${this.master._ethereumAddress}`)
-            }
-
-            // Confirm the settling period for the channel is above the minimum
-            const isAboveMinSettlementPeriod = channel.settlingPeriod.gte(this.master._minIncomingSettlementPeriod)
-            if (!isAboveMinSettlementPeriod) {
-              throw new Error(`channel ${channel.channelId} has settling period of ${channel.settlingPeriod} blocks,`
-                + `below floor of ${this.master._minIncomingSettlementPeriod} blocks`)
-            }
-
-            // Deduct the initiation fee (e.g. this could be used to cover the cost of the claim tx to close the channel)
-            claimIncrement = claimIncrement.minus(this.master._incomingChannelFee)
-            if (claimIncrement.lt(0)) {
-              throw new Error(`claim value of ${format(newClaimValue, Unit.Wei)} is insufficient to cover the initiation fee of ` +
-                `${format(this.master._incomingChannelFee, Unit.Wei)}`)
-            }
-
-            this.master._store.set(channelKey, this.account.accountName)
-            this.master._log.trace(`Incoming channel ${claim.channelId} is now linked to account ${this.account.accountName}`)
-          }
-
-          this.account.bestIncomingClaim = claim
-          this.master._log.info(`Accepted incoming claim from account ${this.account.accountName} for ${format(claimIncrement, Unit.Wei)}`)
-
-          // Start the channel watcher if it wasn't running
-          if (!this.watcher) {
-            this.watcher = this.startChannelWatcher()
-          }
-
-          const amount = convert(claimIncrement, Unit.Wei, Unit.Gwei).dp(0, BigNumber.ROUND_DOWN)
-          this.subBalance(amount)
-
-          await this.moneyHandler(amount.toString())
-        } else {
-          throw new Error(`BTP TRANSFER packet did not include any 'machinomy' subprotocol data`)
+        const hasValidSchema = (o: any): o is IClaim =>
+          typeof o.value === 'string'
+            && typeof o.channelId === 'string'
+            && typeof o.signature === 'string'
+        if (!hasValidSchema(claim)) {
+          throw new Error(`claim schema is malformed`)
         }
 
-        return []
-      } catch (err) {
-        this.master._log.trace(`Failed to validate claim: ${err.message}`)
-        // Don't expose internal errors: this could be problematic if an error wasn't intentionally thrown
-        throw new Error('Invalid claim')
+        await this.validateClaim(claim)
+      } else {
+        throw new Error(`BTP TRANSFER packet did not include any 'machinomy' subprotocol data`)
       }
+
+      return []
+    } catch (err) {
+      this.master._log.trace(`Failed to validate claim: ${err.message}`)
+      // Don't expose internal errors: this could be problematic if an error wasn't intentionally thrown
+      throw new Error('Invalid claim')
+    }
+  }
+
+  private validateClaim (claim: IClaim, retryInterval = 10): Promise<void> {
+    /**
+     * In case of an on-chain funding tx, the peer may know about it before we do.
+     * This allows time for the updated state to propagate to our Ethereum provider
+     * Retry validating the claim ~11 times, backing off up to 10 seconds
+     */
+    const retryValidation = () => {
+      if (retryInterval < 10000) {
+        this.master._log.trace(`Will retry validating the claim in ${retryInterval} ms`)
+
+        const nextRetryInterval = Math.floor(retryInterval * 1.5)
+        setTimeout(() =>
+          this.validateClaim(claim, nextRetryInterval).catch(err =>
+            this.master._log.error(`Attempt to retry claim validation failed: ${err.message}`)
+          ),
+        retryInterval)
+      } else {
+        this.master._log.trace(`Failed to validate claim: can't certify updated channel state, despite several attempts. Will not retry.`)
+      }
+    }
+
+    return this.queue.add(async () => {
+      const oldClaim = this.account.bestIncomingClaim
+      const wrongChannel = oldClaim
+        // New claim is using different channel from the old claim
+        && oldClaim.channelId !== claim.channelId
+        // Old channel is still open (if it was closed, a new claim is acceptable)
+        && (await this.updateChannelCache(oldClaim.channelId))
+      if (wrongChannel) {
+        throw new Error(`account ${this.account.accountName} must use channel ${oldClaim!.channelId}`)
+      }
+
+      let channel: IChannel | undefined = this.channelCache[claim.channelId]
+      // Fetch channel state from network if:
+      // 1) No claim/channel is linked to the account
+      // 2) The channel isn't cached
+      // 3) Claim value is greater than cached channel value (e.g. possible on-chain deposit)
+      const shouldFetchChannel = !oldClaim || !channel
+        || new BigNumber(claim.value).gt(channel.value)
+      if (shouldFetchChannel) {
+        channel = await this.updateChannelCache(claim.channelId)
+      }
+
+      if (!channel) {
+        this.master._log.error(`Failed to validate claim: channel ${
+          claim.channelId
+        } doesn't exist (if recently opened, it may still be propagating)`)
+
+        return retryValidation()
+      }
+
+      if (new BigNumber(claim.value).lte(0)) {
+        throw new Error(`value of claim is 0 or negative`)
+      }
+
+      const contractAddress = this.master._network!.unidirectional.address
+      const paymentDigest = Web3.utils.soliditySha3(contractAddress, claim.channelId, claim.value)
+      const paymentDigestBuffer = Buffer.from(Web3.utils.hexToBytes(paymentDigest))
+      const ethPaymentDigest = Buffer.concat([
+        Buffer.from(SIGN_PREFIX), paymentDigestBuffer
+      ])
+      const senderAddress = ethRecover(claim.signature, keccak256(ethPaymentDigest))
+      const isValidSignature = senderAddress === channel.sender
+      if (!isValidSignature) {
+        throw new Error(`signature is invalid, or sender is using contracts on a different network`)
+      }
+
+      const oldClaimValue = new BigNumber(oldClaim ? oldClaim.value : 0)
+      const newClaimValue = BigNumber.min(channel.value, claim.value)
+      let claimIncrement = newClaimValue.minus(oldClaimValue)
+      if (claimIncrement.eq(0)) {
+        this.master._log.trace(`Disregarding incoming claim: value of ${
+          format(claim.value, Unit.Wei)
+        } is same as previous claim (if peer recently deposited, it may still be propagating)`)
+
+        return retryValidation()
+      } else if (claimIncrement.lt(0)) {
+        throw new Error(`claim value of ${format(claim.value, Unit.Wei)} is less than previous claim for ${format(oldClaimValue, Unit.Wei)}`)
+      }
+
+      // If a new channel is being linked to the account, perform additional validation
+      const linkNewChannel = !oldClaim || claim.channelId !== oldClaim.channelId
+      if (linkNewChannel) {
+        // Each channel key is a mapping of channelId -> accountName to ensure no channel can be linked to multiple accounts
+        // No race condition: a new linked channel will be cached at the end of this closure
+        const channelKey = `${claim.channelId}:incoming-channel`
+        await this.master._store.load(channelKey)
+        const linkedAccount = this.master._store.get(channelKey)
+        const canLinkChannel = !linkedAccount || linkedAccount === this.account.accountName
+        if (!canLinkChannel) {
+          throw new Error(`channel ${claim.channelId} is already linked to a different account`)
+        }
+
+        // Check the channel is to the server's address
+        // (only check for new channels, not per claim, in case the server restarts and changes config)
+        const amReceiver = channel.receiver.toLowerCase() === this.master._ethereumAddress.toLowerCase()
+        if (!amReceiver) {
+          throw new Error(`the recipient for incoming channel ${claim.channelId} is not ${this.master._ethereumAddress}`)
+        }
+
+        // Confirm the settling period for the channel is above the minimum
+        const isAboveMinSettlementPeriod = channel.settlingPeriod.gte(this.master._minIncomingSettlementPeriod)
+        if (!isAboveMinSettlementPeriod) {
+          throw new Error(`channel ${channel.channelId} has settling period of ${channel.settlingPeriod} blocks,`
+            + `below floor of ${this.master._minIncomingSettlementPeriod} blocks`)
+        }
+
+        // Deduct the initiation fee (e.g. this could be used to cover the cost of the claim tx to close the channel)
+        claimIncrement = claimIncrement.minus(this.master._incomingChannelFee)
+        if (claimIncrement.lt(0)) {
+          throw new Error(`claim value of ${format(newClaimValue, Unit.Wei)} is insufficient to cover the initiation fee of ` +
+            `${format(this.master._incomingChannelFee, Unit.Wei)}`)
+        }
+
+        this.master._store.set(channelKey, this.account.accountName)
+        this.master._log.trace(`Incoming channel ${claim.channelId} is now linked to account ${this.account.accountName}`)
+      }
+
+      this.account.bestIncomingClaim = claim
+      this.master._log.info(`Accepted incoming claim from account ${this.account.accountName} for ${format(claimIncrement, Unit.Wei)}`)
+
+      // Start the channel watcher if it wasn't running
+      if (!this.watcher) {
+        this.watcher = this.startChannelWatcher()
+      }
+
+      const amount = convert(claimIncrement, Unit.Wei, Unit.Gwei).dp(0, BigNumber.ROUND_DOWN)
+      this.subBalance(amount)
+
+      await this.moneyHandler(amount.toString())
     }, {
       priority: TaskPriority.Incoming
     })
@@ -793,9 +852,8 @@ export default class EthereumAccount {
     type: Type.TYPE_ILP_PREPARE,
     typeString?: 'ilp_prepare',
     data: IlpPrepare
-  }, responsePacket: IlpPacket): void {
-    const isFulfill = responsePacket.type === Type.TYPE_ILP_FULFILL
-    if (isFulfill) {
+  }, { data: response }: IlpPacket): void {
+    if (isFulfill(response)) {
       this.master._log.trace(`Received a FULFILL in response to the forwarded PREPARE from sendData`)
 
       // Update balance to reflect that we owe them the amount of the FULFILL
@@ -808,11 +866,12 @@ export default class EthereumAccount {
         this.master._log.trace(`Failed to fulfill response to PREPARE: ${err.message}`)
         throw new Errors.InternalError(err.message)
       }
+    } else if (isReject(response)) {
+      this.master._log.trace(`Received a ${response.code} REJECT in response to the forwarded PREPARE from sendData`)
     }
 
     // Attempt to settle on fulfills and* T04s (to resolve stalemates)
-    const shouldSettle = isFulfill ||
-      (responsePacket.type === Type.TYPE_ILP_REJECT && responsePacket.data.code === 'T04')
+    const shouldSettle = isFulfill(response) || (isReject(response) && response.code === 'T04')
     if (shouldSettle) {
       this.attemptSettle().catch((err: Error) => {
         this.master._log.trace(`Error queueing an outgoing settlement: ${err.message}`)
