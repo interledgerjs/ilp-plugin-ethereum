@@ -721,12 +721,15 @@ export default class EthereumAccount {
     const retryValidation = () => {
       if (retryInterval < 10000) {
         this.master._log.trace(`Will retry validating the claim in ${retryInterval} ms`)
+
         const nextRetryInterval = Math.floor(retryInterval * 1.5)
         setTimeout(() =>
           this.validateClaim(claim, nextRetryInterval).catch(err =>
             this.master._log.error(`Attempt to retry claim validation failed: ${err.message}`)
           ),
         retryInterval)
+      } else {
+        this.master._log.trace(`Failed to validate claim: can't certify updated channel state, despite several attempts. Will not retry.`)
       }
     }
 
