@@ -6,6 +6,10 @@
 [![JavaScript Style Guide](https://img.shields.io/badge/code_style-standard-brightgreen.svg)](https://standardjs.com)
 [![Apache 2.0 License](https://img.shields.io/github/license/interledgerjs/ilp-plugin-ethereum.svg)](https://github.com/interledgerjs/ilp-plugin-ethereum/blob/master/LICENSE)
 
+🚨 **Expect breaking changes while this plugin is in beta.**
+
+## Overview
+
 Settle Interledger payments with ether and (soon!) ERC-20 tokens. Powered by [Machinomy smart contracts](https://github.com/machinomy/machinomy) for unidirectional payment channels.
 
 ## Install
