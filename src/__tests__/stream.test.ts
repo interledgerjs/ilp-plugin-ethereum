@@ -6,7 +6,7 @@ import Web3 from 'web3'
 import createLogger from 'ilp-logger'
 import { convert, eth, gwei } from '@kava-labs/crypto-rate-utils'
 
-test.skip('money can be sent between two peers', async t => {
+test('money can be sent between two peers', async t => {
   const ethereumProvider = new Web3.providers.HttpProvider(
     process.env.ETHEREUM_PROVIDER!
   )
@@ -66,7 +66,7 @@ test.skip('money can be sent between two peers', async t => {
 
   // Ensure the initial claim can be accepted
   serverPlugin.deregisterMoneyHandler()
-  await new Promise(resolve => {
+  await new Promise(async resolve => {
     serverPlugin.registerMoneyHandler(async amount => {
       t.true(
         new BigNumber(amount).isEqualTo(SEND_AMOUNT_1),
@@ -75,12 +75,12 @@ test.skip('money can be sent between two peers', async t => {
       resolve()
     })
 
-    t.notThrowsAsync(clientPlugin.sendMoney(SEND_AMOUNT_1.toString()))
+    await t.notThrowsAsync(clientPlugin.sendMoney(SEND_AMOUNT_1.toString()))
   })
 
   // Ensure a greater claim can be accepted
   serverPlugin.deregisterMoneyHandler()
-  await new Promise(resolve => {
+  await new Promise(async resolve => {
     serverPlugin.registerMoneyHandler(async amount => {
       t.true(
         new BigNumber(amount).isEqualTo(SEND_AMOUNT_2),
@@ -89,6 +89,6 @@ test.skip('money can be sent between two peers', async t => {
       resolve()
     })
 
-    t.notThrowsAsync(clientPlugin.sendMoney(SEND_AMOUNT_2.toString()))
+    await t.notThrowsAsync(clientPlugin.sendMoney(SEND_AMOUNT_2.toString()))
   })
 })
