@@ -617,7 +617,7 @@ export default class EthereumAccount {
         `Channel close requested for account ${this.account.accountName}`
       )
 
-      this.claimIfProfitable().catch(err =>
+      await this.claimIfProfitable(false, () => Promise.resolve()).catch(err =>
         this.master._log.error(
           `Error attempting to claim channel: ${err.message}`
         )
@@ -1004,7 +1004,7 @@ export default class EthereumAccount {
     authorize?: (channel: PaymentChannel, fee: BigNumber) => Promise<void>
   ) {
     return this.account.incoming.add(async cachedChannel => {
-      if (!cachedChannel || !cachedChannel.signature) {
+      if (!cachedChannel) {
         return cachedChannel
       }
 
@@ -1127,23 +1127,56 @@ export default class EthereumAccount {
 
   // Request the peer to claim the outgoing channel
   async requestClose() {
-    return this.sendMessage({
-      requestId: await generateBtpRequestId(),
-      type: TYPE_MESSAGE,
-      data: {
-        protocolData: [
-          {
-            protocolName: 'requestClose',
-            contentType: MIME_TEXT_PLAIN_UTF8,
-            data: Buffer.alloc(0)
-          }
-        ]
+    return this.account.outgoing.add(async cachedChannel => {
+      if (!cachedChannel) {
+        return
       }
-    }).catch(err =>
-      this.master._log.debug(
-        `Error while requesting peer to claim channel: ${err.message}`
-      )
-    )
+
+      return this.sendMessage({
+        requestId: await generateBtpRequestId(),
+        type: TYPE_MESSAGE,
+        data: {
+          protocolData: [
+            {
+              protocolName: 'requestClose',
+              contentType: MIME_TEXT_PLAIN_UTF8,
+              data: Buffer.alloc(0)
+            }
+          ]
+        }
+      })
+        .catch(err => {
+          this.master._log.debug(
+            `Error while requesting peer to claim channel: ${err.message}`
+          )
+          return cachedChannel
+        })
+        .then(() => {
+          // Ensure that the channel was successfully closed
+          const refreshChannel = async (
+            attempts = 0
+          ): Promise<PaymentChannel | undefined> => {
+            if (attempts > 60) {
+              this.master._log.error(
+                'Unable to confirm channel close after 1 minute'
+              )
+              return cachedChannel
+            }
+
+            return (
+              // Return undefined if the channel no longer exists (good!)...
+              (await fetchChannel(
+                this.master._contract!,
+                cachedChannel.channelId
+              )) &&
+              // ...or check again in 1 sec if it still exists
+              delay(1000).then(() => refreshChannel(attempts + 1))
+            )
+          }
+
+          return refreshChannel()
+        })
+    })
   }
 
   // From mini-accounts: invoked on a websocket close or error event

@@ -19,7 +19,14 @@ import {
   PluginInstance,
   PluginServices
 } from './types/plugin'
-import { getContract, updateChannel } from './utils/contract'
+import {
+  getContract,
+  updateChannel,
+  remainingInChannel,
+  spentFromChannel,
+  PaymentChannel,
+  ClaimablePaymentChannel
+} from './utils/contract'
 import ReducerQueue from './utils/queue'
 import { MemoryStore, StoreWrapper } from './utils/store'
 
@@ -36,6 +43,14 @@ const defaultDataHandler: DataHandler = () => {
 
 const defaultMoneyHandler: MoneyHandler = () => {
   throw new Error('no money handler registered')
+}
+
+export {
+  EthereumAccount,
+  remainingInChannel,
+  spentFromChannel,
+  PaymentChannel,
+  ClaimablePaymentChannel
 }
 
 export interface EthereumPluginOpts
