@@ -74,6 +74,14 @@ export interface EthereumPluginOpts
   /** Default amount to fund when opening a new channel or depositing to a depleted channel (gwei) */
   outgoingChannelAmount?: BigNumber.Value
 
+  /**
+   * Minimum value of incoming channel in order to _automatically_ fund an outgoing channel to peer (gwei)
+   * - Defaults to infinity, which never automatically opens a channel
+   * - Will also automatically top-up outgoing channels to the outgoing amount when they
+   *   get depleted more than halfway
+   */
+  minIncomingChannelAmount?: BigNumber.Value
+
   /** Minimum number of blocks for settlement period to accept a new incoming channel */
   minIncomingDisputePeriod?: BigNumber.Value
 
@@ -100,6 +108,7 @@ export default class EthereumPlugin extends EventEmitter2
   readonly _web3: Web3
   readonly _getGasPrice: () => Promise<number> // wei
   readonly _outgoingChannelAmount: BigNumber // wei
+  readonly _minIncomingChannelAmount: BigNumber // wei
   readonly _outgoingDisputePeriod: BigNumber // # of blocks
   readonly _minIncomingDisputePeriod: BigNumber // # of blocks
   readonly _maxPacketAmount: BigNumber // gwei
@@ -118,6 +127,7 @@ export default class EthereumPlugin extends EventEmitter2
       ethereumProvider = 'wss://mainnet.infura.io/ws',
       getGasPrice,
       outgoingChannelAmount = convert(eth('0.05'), gwei()),
+      minIncomingChannelAmount = Infinity,
       outgoingDisputePeriod = (6 * (24 * 60 * 60)) /
         15 /** ~ 6 days @ 15 sec block time */,
       minIncomingDisputePeriod = (3 * (24 * 60 * 60)) /
@@ -160,6 +170,13 @@ export default class EthereumPlugin extends EventEmitter2
       this._log.trace || debug(`ilp-plugin-ethereum-${role}:trace`)
 
     this._outgoingChannelAmount = convert(gwei(outgoingChannelAmount), wei())
+      .abs()
+      .dp(0, BigNumber.ROUND_DOWN)
+
+    this._minIncomingChannelAmount = convert(
+      gwei(minIncomingChannelAmount),
+      wei()
+    )
       .abs()
       .dp(0, BigNumber.ROUND_DOWN)
 

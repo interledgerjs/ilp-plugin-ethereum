@@ -260,190 +260,242 @@ export default class EthereumAccount {
     }
   }
 
+  /**
+   * Create a channel with the given amount or deposit the given amount to an existing outgoing channel,
+   * invoking the authorize callback to confirm the transaction fee
+   * - Fund amount is in units of wei
+   */
   async fundOutgoingChannel(
-    value: BigNumber = this.master._outgoingChannelAmount,
+    value: BigNumber,
     authorize: (fee: BigNumber) => Promise<void> = () => Promise.resolve()
-  ): Promise<void> {
+  ) {
+    await this.account.outgoing.add(cachedChannel =>
+      cachedChannel
+        ? this.depositToChannel(cachedChannel, value, authorize)
+        : this.openChannel(value, authorize)
+    )
+  }
+
+  /** Automatically fund a new outgoing channel,  */
+  private async autoFundOutgoingChannel() {
     await this.account.outgoing.add(async cachedChannel => {
-      const valueWei = convert(gwei(value), wei())
-
-      // Always refresh the channel details
-      // TODO This should only happen if depositing, right? (Does it need to though?)
-      const channel =
-        cachedChannel &&
-        (await updateChannel(this.master._contract!, cachedChannel))
-
-      if (!channel) {
-        await this.fetchEthereumAddress()
-        if (!this.account.ethereumAddress) {
-          this.master._log.debug(
-            'Failed to open channel: no Ethereum address is linked'
-          )
-          return
-        }
-
-        const channelId = await generateChannelId()
-        const txObj = this.master._contract!.methods.open(
-          channelId,
-          this.account.ethereumAddress,
-          this.master._outgoingDisputePeriod.toString()
+      const requiresTopUp =
+        !cachedChannel ||
+        remainingInChannel(cachedChannel).isLessThan(
+          this.master._outgoingChannelAmount.dividedBy(2)
         )
 
-        const { sendTransaction, txFee } = await prepareTransaction({
-          txObj,
-          value: valueWei,
-          from: this.master._ethereumAddress,
-          gasPrice: await this.master._getGasPrice()
-        })
-
-        await authorize(txFee)
-
-        this.master._log.debug(
-          `Opening channel for ${format(gwei(value))} and fee of ${format(
-            wei(txFee)
-          )}`
+      const incomingChannel = this.account.incoming.state
+      const sufficientIncoming =
+        incomingChannel &&
+        incomingChannel.value.isGreaterThan(
+          this.master._minIncomingChannelAmount
         )
 
-        const emitter = sendTransaction()
-
-        await new Promise((resolve, reject) => {
-          emitter.on(
-            'confirmation',
-            (confNumber: number, receipt: TransactionReceipt) => {
-              if (!receipt.status) {
-                this.master._log.error(
-                  `Failed to open channel: on-chain transaction reverted by the EVM`
-                )
-                reject()
-              } else if (confNumber >= 1) {
-                this.master._log.info(
-                  `Successfully opened new channel ${channelId} for ${format(
-                    gwei(value)
-                  )} and fee of ${format(wei(txFee))}`
-                )
-
-                // TODO Should the channel refreshing occur here?
-                // TODO If it was mined (but then was orphaned, idk), the tx might
-                // still be pending and get mined later, so it'd be a shame to throw away the open channel
-
-                resolve()
-              }
-            }
-          )
-
-          emitter.on('error', (err: Error) => {
-            this.master._log.error(`Failed to open channel: ${err.message}`)
-            reject()
-          })
-        })
-
-        // @ts-ignore
-        emitter.removeAllListeners()
-
-        // Ensure that we've successfully fetched the channel details before sending a claim
-        const refreshChannel = async (
-          attempts = 0
-        ): Promise<PaymentChannel | undefined> => {
-          if (attempts > 20) {
-            this.master._log.error(
-              'Unable to lookup newly opened channel after 20 attempts despite 1 block confirmation'
+      if (requiresTopUp && sufficientIncoming) {
+        return cachedChannel
+          ? this.depositToChannel(
+              cachedChannel,
+              this.master._outgoingChannelAmount.minus(cachedChannel.value)
             )
-            return
-          }
-
-          // Swallow errors here: we'll throw if all attempts fail
-          const updatedChannel = await fetchChannel(
-            this.master._contract!,
-            channelId
-          ).catch(() => undefined)
-
-          return !updatedChannel
-            ? delay(500).then(() => refreshChannel(attempts + 1))
-            : updatedChannel
-        }
-
-        return refreshChannel()
-      } else {
-        const totalNewValue = channel.value.plus(value)
-
-        const channelId = channel.channelId
-        const txObj = this.master._contract!.methods.deposit(channelId)
-
-        const { sendTransaction, txFee } = await prepareTransaction({
-          txObj,
-          value: valueWei,
-          from: channel.sender,
-          gasPrice: await this.master._getGasPrice()
-        })
-
-        await authorize(txFee)
-
-        this.master._log.debug(
-          `Depositing ${format(gwei(value))} to channel for fee of ${format(
-            wei(txFee)
-          )}`
-        )
-        const emitter = sendTransaction()
-
-        await new Promise((resolve, reject) => {
-          emitter.on(
-            'confirmation',
-            (confNumber: number, receipt: TransactionReceipt) => {
-              if (!receipt.status) {
-                this.master._log.error(
-                  `Failed to deposit to channel: on-chain transaction reverted by the EVM`
-                )
-                reject()
-              } else if (confNumber >= 1) {
-                this.master._log.info(
-                  `Successfully deposited ${format(
-                    gwei(value)
-                  )} to channel ${channelId}`
-                )
-                resolve()
-              }
-            }
-          )
-
-          emitter.on('error', (err: Error) => {
-            this.master._log.error(
-              `Failed to deposit to channel: ${err.message}`
-            )
-            reject()
-          })
-        })
-
-        // @ts-ignore
-        emitter.removeAllListeners()
-
-        // Ensure that we've successfully fetched the updated channel details before sending a new claim
-        const refreshChannel = async (
-          attempts = 0
-        ): Promise<PaymentChannel | undefined> => {
-          if (attempts > 20) {
-            this.master._log.error(
-              'Unable to lookup new channel details after 20 attempts despite 1 block confirmation'
-            )
-            return channel
-          }
-
-          const updatedChannel = await updateChannel(
-            this.master._contract!,
-            channel
-          )
-
-          const successfulDeposit =
-            updatedChannel &&
-            updatedChannel.value.isGreaterThanOrEqualTo(totalNewValue)
-
-          return !successfulDeposit
-            ? delay(500).then(() => refreshChannel(attempts + 1))
-            : updatedChannel
-        }
-
-        return refreshChannel()
+          : this.openChannel(this.master._outgoingChannelAmount)
       }
+
+      return cachedChannel
     })
+  }
+
+  /** Open a channel for the given amount in units of wei */
+  private async openChannel(
+    value: BigNumber,
+    authorize: (fee: BigNumber) => Promise<void> = () => Promise.resolve()
+  ): Promise<PaymentChannel | undefined> {
+    await this.fetchEthereumAddress()
+    if (!this.account.ethereumAddress) {
+      this.master._log.debug(
+        'Failed to open channel: no Ethereum address is linked'
+      )
+      return
+    }
+
+    const channelId = await generateChannelId()
+    const txObj = this.master._contract!.methods.open(
+      channelId,
+      this.account.ethereumAddress,
+      this.master._outgoingDisputePeriod.toString()
+    )
+
+    const { sendTransaction, txFee } = await prepareTransaction({
+      txObj,
+      value,
+      from: this.master._ethereumAddress,
+      gasPrice: await this.master._getGasPrice()
+    })
+
+    await authorize(txFee)
+
+    this.master._log.debug(
+      `Opening channel for ${format(wei(value))} and fee of ${format(
+        wei(txFee)
+      )}`
+    )
+
+    const emitter = sendTransaction()
+
+    await new Promise((resolve, reject) => {
+      emitter.on(
+        'confirmation',
+        (confNumber: number, receipt: TransactionReceipt) => {
+          if (!receipt.status) {
+            this.master._log.error(
+              `Failed to open channel: on-chain transaction reverted by the EVM`
+            )
+            reject()
+          } else if (confNumber >= 1) {
+            this.master._log.info(
+              `Successfully opened new channel ${channelId} for ${format(
+                wei(value)
+              )} and fee of ${format(wei(txFee))}`
+            )
+
+            /**
+             * TODO Should the channel refreshing occur here?
+             * If it was mined (but then was orphaned, idk), the tx might
+             * still be pending and get mined later, so it'd be a shame to throw away the open channel
+             */
+
+            resolve()
+          }
+        }
+      )
+
+      emitter.on('error', (err: Error) => {
+        this.master._log.error(`Failed to open channel: ${err.message}`)
+        reject()
+      })
+    })
+
+    // @ts-ignore
+    emitter.removeAllListeners()
+
+    // Ensure that we've successfully fetched the channel details before sending a claim
+    const refreshChannel = async (
+      attempts = 0
+    ): Promise<PaymentChannel | undefined> => {
+      if (attempts > 20) {
+        this.master._log.error(
+          'Unable to lookup newly opened channel after 20 attempts despite 1 block confirmation'
+        )
+        return
+      }
+
+      // Swallow errors here: we'll throw if all attempts fail
+      const updatedChannel = await fetchChannel(
+        this.master._contract!,
+        channelId
+      ).catch(() => undefined)
+
+      return !updatedChannel
+        ? delay(500).then(() => refreshChannel(attempts + 1))
+        : updatedChannel
+    }
+
+    return refreshChannel().then(
+      async channel =>
+        channel &&
+        // Send a 0 amount claim to the peer so they'll link the channel
+        this.sendClaim(this.signClaim(new BigNumber(0), channel))
+          .catch(err =>
+            this.master._log.error(
+              'Error sending proof-of-channel to peer: ',
+              err
+            )
+          )
+          .then(() => channel)
+    )
+  }
+
+  /** Deposit the given amount in units of wei to the given channel */
+  private async depositToChannel(
+    channel: PaymentChannel,
+    value: BigNumber,
+    authorize: (fee: BigNumber) => Promise<void> = () => Promise.resolve()
+  ): Promise<PaymentChannel | undefined> {
+    const totalNewValue = channel.value.plus(value)
+
+    const channelId = channel.channelId
+    const txObj = this.master._contract!.methods.deposit(channelId)
+
+    const { sendTransaction, txFee } = await prepareTransaction({
+      txObj,
+      value,
+      from: channel.sender,
+      gasPrice: await this.master._getGasPrice()
+    })
+
+    await authorize(txFee)
+
+    this.master._log.debug(
+      `Depositing ${format(wei(value))} to channel for fee of ${format(
+        wei(txFee)
+      )}`
+    )
+    const emitter = sendTransaction()
+
+    await new Promise((resolve, reject) => {
+      emitter.on(
+        'confirmation',
+        (confNumber: number, receipt: TransactionReceipt) => {
+          if (!receipt.status) {
+            this.master._log.error(
+              `Failed to deposit to channel: on-chain transaction reverted by the EVM`
+            )
+            reject()
+          } else if (confNumber >= 1) {
+            this.master._log.info(
+              `Successfully deposited ${format(
+                wei(value)
+              )} to channel ${channelId}`
+            )
+            resolve()
+          }
+        }
+      )
+
+      emitter.on('error', (err: Error) => {
+        this.master._log.error(`Failed to deposit to channel: ${err.message}`)
+        reject()
+      })
+    })
+
+    // @ts-ignore
+    emitter.removeAllListeners()
+
+    // Ensure that we've successfully fetched the updated channel details before sending a new claim
+    const refreshChannel = async (
+      attempts = 0
+    ): Promise<PaymentChannel | undefined> => {
+      if (attempts > 20) {
+        this.master._log.error(
+          'Unable to lookup new channel details after 20 attempts despite 1 block confirmation'
+        )
+        return channel
+      }
+
+      const updatedChannel = await updateChannel(
+        this.master._contract!,
+        channel
+      )
+
+      const successfulDeposit =
+        updatedChannel && updatedChannel.value.isEqualTo(totalNewValue)
+
+      return !successfulDeposit
+        ? delay(500).then(() => refreshChannel(attempts + 1))
+        : updatedChannel
+    }
+
+    return refreshChannel()
   }
 
   /**
@@ -455,38 +507,33 @@ export default class EthereumAccount {
    * If no amount is specified (e.g. role=server), settle such that 0 is owed to the peer.
    */
   async sendMoney(amount?: string) {
-    // TODO Don't log 0 amount settlements!
-
     await this.account.outgoing.add(async cachedChannel => {
-      this.master._log.info(
-        `Settlement attempt triggered with ${this.account.accountName}`
+      this.autoFundOutgoingChannel().catch(err =>
+        this.master._log.error(
+          'Error attempting to auto fund outgoing channel: ',
+          err
+        )
       )
 
       const amountToSend =
         amount || BigNumber.max(0, this.account.payableBalance)
 
       this.account.payoutAmount = this.account.payoutAmount.plus(amountToSend)
+
       const settlementBudget = convert(gwei(this.account.payoutAmount), wei())
+      if (settlementBudget.lte(0)) {
+        return cachedChannel
+      }
 
       if (!cachedChannel) {
         this.master._log.debug(`Cannot send claim: no channel is open`)
         return
       }
 
-      // Even if the channel is disputed, continue to send claims: assuming this plugin is not malicious,
-      // sending a better claim is good, because it may incentivize the receiver to claim the channel
-
-      // Ensure the claim increment is always > 0
-      if (!remainingInChannel(cachedChannel).isPositive()) {
+      // Used to ensure the claim increment is always > 0
+      if (!remainingInChannel(cachedChannel).gt(0)) {
         this.master._log.debug(
           `Cannot send claim to: no remaining funds in outgoing channel`
-        )
-        return cachedChannel
-      }
-
-      if (!settlementBudget.isPositive()) {
-        this.master._log.debug(
-          `Cannot send claim to: no remaining settlement budget`
         )
         return cachedChannel
       }
@@ -496,6 +543,10 @@ export default class EthereumAccount {
       const claimIncrement = BigNumber.min(
         remainingInChannel(cachedChannel),
         settlementBudget
+      )
+
+      this.master._log.info(
+        `Settlement attempt triggered with ${this.account.accountName}`
       )
 
       // Total value of new claim: value of old best claim + increment of new claim
@@ -658,6 +709,18 @@ export default class EthereumAccount {
           this.master._log.error('Failed to validate claim: ', err)
         )
 
+      /**
+       * Attempt to fund an outgoing channel, if the incoming claim is accepted,
+       * the incoming channel has sufficient value, and no existing outgoing
+       * channel already exists
+       */
+      this.autoFundOutgoingChannel().catch(err =>
+        this.master._log.error(
+          'Error attempting to auto fund outgoing channel: ',
+          err
+        )
+      )
+
       return []
     }
 
@@ -755,7 +818,11 @@ export default class EthereumAccount {
 
     // Perform checks to link a new channel
     if (!cachedChannel) {
-      // TODO Should this also re-try if the claim value is greater than the channel value, akin to deposits?
+      /**
+       * TODO Should this also re-try if the claim value is greater than the channel value, akin to deposits?
+       * It *is* same, however, since the claimIncrement is always calculated & capped by channel capacity
+       */
+
       if (!updatedChannel) {
         this.master._log.debug(
           `Disregarding incoming claim: channel ${
@@ -888,7 +955,7 @@ export default class EthereumAccount {
       updatedChannel.value
     ).minus(cachedChannel ? cachedChannel.spent : 0)
 
-    const isBestClaim = claimIncrement.isPositive()
+    const isBestClaim = claimIncrement.gt(0)
     if (!isBestClaim && cachedChannel) {
       this.master._log.debug(
         `Invalid claim: value of ${format(

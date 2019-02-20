@@ -4,7 +4,7 @@ import BigNumber from 'bignumber.js'
 import test from 'ava'
 import Web3 from 'web3'
 import createLogger from 'ilp-logger'
-import { convert, eth, gwei } from '@kava-labs/crypto-rate-utils'
+import { convert, eth, gwei, wei } from '@kava-labs/crypto-rate-utils'
 
 test('money can be sent between two peers', async t => {
   const ethereumProvider = new Web3.providers.HttpProvider(
@@ -42,8 +42,8 @@ test('money can be sent between two peers', async t => {
 
   await Promise.all([serverPlugin.connect(), clientPlugin.connect()])
 
-  const AMOUNT_TO_FUND = convert(eth('0.002'), gwei())
-  const AMOUNT_TO_DEPOSIT = convert(eth('0.001'), gwei())
+  const AMOUNT_TO_FUND = convert(eth('0.002'), wei())
+  const AMOUNT_TO_DEPOSIT = convert(eth('0.001'), wei())
 
   const SEND_AMOUNT_1 = convert(eth('0.0023'), gwei())
   const SEND_AMOUNT_2 = convert(eth('0.0005'), gwei())

@@ -15,7 +15,8 @@
     "build": "tsc",
     "lint": "tslint --project .",
     "test": "nyc ava",
-    "test-inspect": "node --inspect-brk node_modules/ava/profile.js"
+    "test-inspect": "node --inspect-brk node_modules/ava/profile.js",
+    "format": "prettier --write 'src/**/*.ts'"
   },
   "repository": {
     "type": "git",

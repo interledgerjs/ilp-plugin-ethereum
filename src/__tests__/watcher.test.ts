@@ -4,7 +4,7 @@ import EthereumPlugin from '..'
 import { getContract, prepareTransaction } from '../utils/contract'
 import { MemoryStore } from '../utils/store'
 import test from 'ava'
-import { convert, eth, gwei } from '@kava-labs/crypto-rate-utils'
+import { convert, eth, gwei, wei } from '@kava-labs/crypto-rate-utils'
 
 test(`channel watcher claims settling channel if it's profitable`, async t => {
   t.plan(1)
@@ -59,10 +59,9 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
   await clientPlugin.connect()
 
   // Create channel & send claim to server
-  const AMOUNT_TO_SEND = convert(eth('0.0015'), gwei())
   const pluginAccount = await clientPlugin._loadAccount('peer')
-  await pluginAccount.fundOutgoingChannel(AMOUNT_TO_SEND)
-  await clientPlugin.sendMoney(AMOUNT_TO_SEND.toString())
+  await pluginAccount.fundOutgoingChannel(convert(eth('0.0015'), wei()))
+  await clientPlugin.sendMoney(convert(eth('0.0015'), gwei()).toString())
 
   // Wait for claims to finish processing
   await new Promise(r => setTimeout(r, 2000))
