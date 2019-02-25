@@ -296,7 +296,7 @@ export default class EthereumAccount {
         return cachedChannel
           ? this.depositToChannel(
               cachedChannel,
-              this.master._outgoingChannelAmount.minus(cachedChannel.value)
+              this.master._outgoingChannelAmount.minus(remainingInChannel(cachedChannel))
             )
           : this.openChannel(this.master._outgoingChannelAmount)
       }
