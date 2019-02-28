@@ -3,7 +3,7 @@
     "baseUrl": "src",
     "rootDir": "src",
     "outDir": "build",
-    "target": "es2017",
+    "target": "esnext",
     "module": "commonjs",
     "moduleResolution": "node",
     "sourceMap": true,
