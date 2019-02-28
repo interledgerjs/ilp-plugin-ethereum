@@ -116,6 +116,7 @@ export default class EthereumPlugin extends EventEmitter2
   readonly _channelWatcherInterval: BigNumber // ms
   readonly _store: StoreWrapper
   readonly _log: Logger
+  _txPipeline: Promise<void> = Promise.resolve()
   _contract?: Contract // Web3 contract object
   _dataHandler: DataHandler = defaultDataHandler
   _moneyHandler: MoneyHandler = defaultMoneyHandler
@@ -283,6 +284,14 @@ export default class EthereumPlugin extends EventEmitter2
     }
 
     return this._accounts.get(accountName)!
+  }
+
+  async _queueTransaction(sendTransaction: () => Promise<void>) {
+    await new Promise<void>((resolve, reject) => {
+      this._txPipeline = this._txPipeline
+        .then(sendTransaction)
+        .then(resolve, reject)
+    })
   }
 
   async connect() {

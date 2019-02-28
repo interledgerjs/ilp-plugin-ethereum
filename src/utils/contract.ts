@@ -111,30 +111,22 @@ export const getContract = async (web3: Web3) => {
 }
 
 // TODO Add sanity checks to ensure it's *actually* the same channel?
-
-// TODO Weird edge case: we get a confirmation of our channel open, but another block
-// simultaneously gets mined with the same channelId, which supercedes it.
-// Because we don't confirm anything about the channel when we first fetch it,
-// it's *possible* that's it the attackers channel and not our channel
-// (since this is an outgoing channel, we'd sign claims and they'd just fail? Would anything else bad happen?)
-// (would a global counter solve this?)
-
+// TODO Is this essentially, update paychan *with* claim, whereas fetch channel is update paychan *without* claim?
 export const updateChannel = async <TPaymentChannel extends PaymentChannel>(
   contract: Contract,
   cachedChannel: TPaymentChannel
-): Promise<TPaymentChannel | undefined> => {
-  const updatedChannel = await fetchChannel(
-    contract,
-    cachedChannel.channelId
-  ).catch(() => cachedChannel)
-  return updatedChannel
-    ? {
-        ...cachedChannel,
-        ...updatedChannel,
-        spent: cachedChannel.spent
-      }
-    : updatedChannel
-}
+): Promise<TPaymentChannel | undefined> =>
+  fetchChannel(contract, cachedChannel.channelId)
+    .then(
+      updatedChannel =>
+        updatedChannel && {
+          ...cachedChannel,
+          ...updatedChannel,
+          spent: cachedChannel.spent,
+          signature: cachedChannel.signature
+        }
+    )
+    .catch(() => cachedChannel)
 
 export const fetchChannel = async (
   contract: Contract,
@@ -182,7 +174,7 @@ export const prepareTransaction = async ({
   value?: BigNumber.Value
 }): Promise<{
   txFee: BigNumber
-  sendTransaction: () => PromiEvent<TransactionReceipt>
+  sendTransaction: () => Promise<void>
 }> => {
   const tx = {
     from,
@@ -194,12 +186,33 @@ export const prepareTransaction = async ({
 
   return {
     txFee,
-    sendTransaction: () =>
-      txObj.send({
+    sendTransaction: () => {
+      const emitter = txObj.send({
         ...tx,
         gasPrice,
         gas
       })
+
+      return new Promise<void>((resolve, reject) => {
+        emitter.on(
+          'confirmation',
+          (confNumber: number, receipt: TransactionReceipt) => {
+            if (!receipt.status) {
+              reject(new Error('Ethereum transaction reverted by the EVM'))
+            } else if (confNumber >= 1) {
+              resolve()
+            }
+          }
+        )
+
+        emitter.on('error', (err: Error) => {
+          reject(err)
+        })
+      }).finally(() => {
+        // @ts-ignore
+        emitter.removeAllListeners()
+      })
+    }
   }
 }
 
@@ -216,10 +229,23 @@ export const isValidClaimSignature = (
   claim: SerializedClaim,
   channel: PaymentChannel
 ): boolean => {
+  const senderAddress = recover(
+    claim.signature,
+    createPaymentDigest(claim.contractAddress, claim.channelId, claim.value)
+  )
+
+  return senderAddress.toLowerCase() === channel.sender.toLowerCase()
+}
+
+export const createPaymentDigest = (
+  contractAddress: string,
+  channelId: string,
+  value: string
+) => {
   const paymentDigest = Web3.utils.soliditySha3(
-    claim.contractAddress,
-    claim.channelId,
-    claim.value
+    contractAddress,
+    channelId,
+    value
   )
 
   const paymentDigestBuffer = Buffer.from(Web3.utils.hexToBytes(paymentDigest))
@@ -229,12 +255,7 @@ export const isValidClaimSignature = (
     paymentDigestBuffer
   ])
 
-  const senderAddress = recover(
-    claim.signature,
-    keccak256(prefixedPaymentDigest)
-  )
-
-  return senderAddress.toLowerCase() === channel.sender.toLowerCase()
+  return keccak256(prefixedPaymentDigest)
 }
 
 export const SIGNED_MESSAGE_PREFIX = '\x19Ethereum Signed Message:\n32'

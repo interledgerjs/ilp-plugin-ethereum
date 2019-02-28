@@ -25,10 +25,8 @@ import {
   isReject
 } from 'ilp-packet'
 import { BtpPacket, BtpPacketData, BtpSubProtocol } from 'ilp-plugin-btp'
-import { keccak256 } from 'js-sha3'
 import { promisify } from 'util'
 import Web3 from 'web3'
-import { TransactionReceipt } from 'web3/types'
 import EthereumPlugin from '.'
 import { DataHandler, MoneyHandler } from './types/plugin'
 import {
@@ -41,9 +39,9 @@ import {
   prepareTransaction,
   remainingInChannel,
   SerializedClaim,
-  SIGNED_MESSAGE_PREFIX,
   spentFromChannel,
-  updateChannel
+  updateChannel,
+  createPaymentDigest
 } from './utils/contract'
 import ReducerQueue from './utils/queue'
 
@@ -94,14 +92,17 @@ export interface AccountData {
   ethereumAddress?: string
 
   /**
-   * Priority FIFO queue for validating incoming claims,
-   * watching channels and claiming channels
+   * Priority FIFO queue for incoming channel state updates:
+   * - Validating claims
+   * - Watching channels
+   * - Claiming chanenls
    */
   incoming: ReducerQueue<ClaimablePaymentChannel | undefined>
 
   /**
-   * Priority FIFO queue for opening/depositing to channels,
-   * and signing outgoing payment channel claims
+   * Priority FIFO queue for outgoing channel state updates:
+   * - Signing claims
+   * - Refreshing state after funding transactions
    */
   outgoing: ReducerQueue<PaymentChannel | undefined>
 }
@@ -118,6 +119,12 @@ export default class EthereumAccount {
 
   /** Expose access to common configuration across accounts */
   private master: EthereumPlugin
+
+  /**
+   * Queue for channel state/signing outgoing claims ONLY while a deposit is occuring,
+   * enabling them to happen in parallel
+   */
+  private depositQueue?: ReducerQueue<PaymentChannel | undefined>
 
   /**
    * Send the given BTP packet message to the counterparty for this account
@@ -269,6 +276,7 @@ export default class EthereumAccount {
     value: BigNumber,
     authorize: (fee: BigNumber) => Promise<void> = () => Promise.resolve()
   ) {
+    // TODO Do I need any error handling here!?
     await this.account.outgoing.add(cachedChannel =>
       cachedChannel
         ? this.depositToChannel(cachedChannel, value, authorize)
@@ -296,7 +304,9 @@ export default class EthereumAccount {
         return cachedChannel
           ? this.depositToChannel(
               cachedChannel,
-              this.master._outgoingChannelAmount.minus(remainingInChannel(cachedChannel))
+              this.master._outgoingChannelAmount.minus(
+                remainingInChannel(cachedChannel)
+              )
             )
           : this.openChannel(this.master._outgoingChannelAmount)
       }
@@ -305,7 +315,10 @@ export default class EthereumAccount {
     })
   }
 
-  /** Open a channel for the given amount in units of wei */
+  /**
+   * Open a channel for the given amount in units of wei
+   * - Must always be called from a task in the outgoing queue
+   */
   private async openChannel(
     value: BigNumber,
     authorize: (fee: BigNumber) => Promise<void> = () => Promise.resolve()
@@ -340,70 +353,19 @@ export default class EthereumAccount {
       )}`
     )
 
-    const emitter = sendTransaction()
-
-    await new Promise((resolve, reject) => {
-      emitter.on(
-        'confirmation',
-        (confNumber: number, receipt: TransactionReceipt) => {
-          if (!receipt.status) {
-            this.master._log.error(
-              `Failed to open channel: on-chain transaction reverted by the EVM`
-            )
-            reject()
-          } else if (confNumber >= 1) {
-            this.master._log.info(
-              `Successfully opened new channel ${channelId} for ${format(
-                wei(value)
-              )} and fee of ${format(wei(txFee))}`
-            )
-
-            /**
-             * TODO Should the channel refreshing occur here?
-             * If it was mined (but then was orphaned, idk), the tx might
-             * still be pending and get mined later, so it'd be a shame to throw away the open channel
-             */
-
-            resolve()
-          }
-        }
-      )
-
-      emitter.on('error', (err: Error) => {
-        this.master._log.error(`Failed to open channel: ${err.message}`)
-        reject()
-      })
+    await this.master._queueTransaction(sendTransaction).catch(err => {
+      this.master._log.error(`Failed to open channel:`, err)
+      throw err
     })
 
-    // @ts-ignore
-    emitter.removeAllListeners()
-
     // Ensure that we've successfully fetched the channel details before sending a claim
-    const refreshChannel = async (
-      attempts = 0
-    ): Promise<PaymentChannel | undefined> => {
-      if (attempts > 20) {
-        this.master._log.error(
-          'Unable to lookup newly opened channel after 20 attempts despite 1 block confirmation'
-        )
-        return
-      }
-
-      // Swallow errors here: we'll throw if all attempts fail
-      const updatedChannel = await fetchChannel(
-        this.master._contract!,
-        channelId
-      ).catch(() => undefined)
-
-      return !updatedChannel
-        ? delay(500).then(() => refreshChannel(attempts + 1))
-        : updatedChannel
-    }
-
-    return refreshChannel().then(
+    return this.refreshChannel(
+      channelId,
+      (channel): channel is PaymentChannel => !!channel
+    )().then(
       async channel =>
         channel &&
-        // Send a 0 amount claim to the peer so they'll link the channel
+        // Send a zero amount claim to the peer so they'll link the channel
         this.sendClaim(this.signClaim(new BigNumber(0), channel))
           .catch(err =>
             this.master._log.error(
@@ -413,89 +375,85 @@ export default class EthereumAccount {
           )
           .then(() => channel)
     )
+
+    // TODO Handle errors from refresh channel
+    // TODO Log that the channel was successfully created
   }
 
-  /** Deposit the given amount in units of wei to the given channel */
+  /**
+   * Deposit the given amount in units of wei to the given channel
+   * - Must always be called from a task in the outgoing queue
+   */
   private async depositToChannel(
     channel: PaymentChannel,
     value: BigNumber,
     authorize: (fee: BigNumber) => Promise<void> = () => Promise.resolve()
   ): Promise<PaymentChannel | undefined> {
+    // To simultaneously send payment channel claims, create a "side queue" only for the duration of the deposit
+    this.depositQueue = new ReducerQueue<PaymentChannel | undefined>(channel)
+
     const totalNewValue = channel.value.plus(value)
+    const isDepositSuccessful = (
+      updatedChannel: PaymentChannel | undefined
+    ): updatedChannel is PaymentChannel =>
+      !!updatedChannel && updatedChannel.value.isEqualTo(totalNewValue)
 
     const channelId = channel.channelId
     const txObj = this.master._contract!.methods.deposit(channelId)
 
-    const { sendTransaction, txFee } = await prepareTransaction({
+    return prepareTransaction({
       txObj,
       value,
       from: channel.sender,
       gasPrice: await this.master._getGasPrice()
     })
+      .then(async ({ sendTransaction, txFee }) => {
+        await authorize(txFee)
 
-    await authorize(txFee)
-
-    this.master._log.debug(
-      `Depositing ${format(wei(value))} to channel for fee of ${format(
-        wei(txFee)
-      )}`
-    )
-    const emitter = sendTransaction()
-
-    await new Promise((resolve, reject) => {
-      emitter.on(
-        'confirmation',
-        (confNumber: number, receipt: TransactionReceipt) => {
-          if (!receipt.status) {
-            this.master._log.error(
-              `Failed to deposit to channel: on-chain transaction reverted by the EVM`
-            )
-            reject()
-          } else if (confNumber >= 1) {
-            this.master._log.info(
-              `Successfully deposited ${format(
-                wei(value)
-              )} to channel ${channelId}`
-            )
-            resolve()
-          }
-        }
-      )
-
-      emitter.on('error', (err: Error) => {
-        this.master._log.error(`Failed to deposit to channel: ${err.message}`)
-        reject()
-      })
-    })
-
-    // @ts-ignore
-    emitter.removeAllListeners()
-
-    // Ensure that we've successfully fetched the updated channel details before sending a new claim
-    const refreshChannel = async (
-      attempts = 0
-    ): Promise<PaymentChannel | undefined> => {
-      if (attempts > 20) {
-        this.master._log.error(
-          'Unable to lookup new channel details after 20 attempts despite 1 block confirmation'
+        this.master._log.debug(
+          `Depositing ${format(wei(value))} to channel for fee of ${format(
+            wei(txFee)
+          )}`
         )
-        return channel
-      }
 
-      const updatedChannel = await updateChannel(
-        this.master._contract!,
-        channel
-      )
+        await this.master._queueTransaction(sendTransaction)
+        // TODO If refreshChannel throws, is the behavior correct?
+        const updatedChannel = await this.refreshChannel(
+          channel,
+          isDepositSuccessful
+        )()
 
-      const successfulDeposit =
-        updatedChannel && updatedChannel.value.isEqualTo(totalNewValue)
+        this.master._log.debug(
+          `Successfully deposited ${format(
+            wei(value)
+          )} to channel ${channelId} for total value of ${format(
+            wei(totalNewValue)
+          )}`
+        )
 
-      return !successfulDeposit
-        ? delay(500).then(() => refreshChannel(attempts + 1))
-        : updatedChannel
-    }
+        const bestClaim = this.depositQueue!.clear()
+        delete this.depositQueue // Don't await the promise so no new tasks are added to the queue
 
-    return refreshChannel()
+        // Merge the updated channel state with any claims sent in the side queue
+        // TODO Rename this
+        const alternativeState = await bestClaim
+        return alternativeState
+          ? {
+              ...updatedChannel,
+              signature: alternativeState.signature,
+              spent: alternativeState.spent
+            }
+          : updatedChannel
+      })
+      .catch(err => {
+        this.master._log.error(`Failed to deposit to channel:`, err)
+
+        // Since there's no updated state from the deposit, just use the state from the side queue
+        const bestClaim = this.depositQueue!.clear()
+        delete this.depositQueue // Don't await the promise so no new tasks are added to the queue
+
+        return bestClaim
+      })
   }
 
   /**
@@ -507,7 +465,9 @@ export default class EthereumAccount {
    * If no amount is specified (e.g. role=server), settle such that 0 is owed to the peer.
    */
   async sendMoney(amount?: string) {
-    await this.account.outgoing.add(async cachedChannel => {
+    const sendClaim = async (
+      cachedChannel: PaymentChannel | undefined
+    ): Promise<PaymentChannel | undefined> => {
       this.autoFundOutgoingChannel().catch(err =>
         this.master._log.error(
           'Error attempting to auto fund outgoing channel: ',
@@ -527,7 +487,7 @@ export default class EthereumAccount {
 
       if (!cachedChannel) {
         this.master._log.debug(`Cannot send claim: no channel is open`)
-        return
+        return cachedChannel
       }
 
       // Used to ensure the claim increment is always > 0
@@ -583,28 +543,21 @@ export default class EthereumAccount {
       )
 
       return updatedChannel
-    })
+    }
+
+    this.depositQueue
+      ? await this.depositQueue.add(sendClaim)
+      : await this.account.outgoing.add(sendClaim)
   }
 
   signClaim(value: BigNumber, cachedChannel: PaymentChannel): PaymentChannel {
-    const paymentDigest = Web3.utils.soliditySha3(
-      cachedChannel.contractAddress,
-      cachedChannel.channelId,
-      value.toString()
-    )
-
-    const paymentDigestBuffer = Buffer.from(
-      Web3.utils.hexToBytes(paymentDigest)
-    )
-
-    const prefixedPaymentDigest = Buffer.concat([
-      Buffer.from(SIGNED_MESSAGE_PREFIX),
-      paymentDigestBuffer
-    ])
-
     const signature = sign(
       this.master._privateKey,
-      keccak256(prefixedPaymentDigest)
+      createPaymentDigest(
+        cachedChannel.contractAddress,
+        cachedChannel.channelId,
+        value.toString()
+      )
     )
 
     return {
@@ -705,7 +658,7 @@ export default class EthereumAccount {
       await this.account.incoming
         .add(this.validateClaim(claim), IncomingTaskPriority.ValidateClaim)
         .catch(err =>
-          // Don't expose internal errors, since it wasn't intentionally thrown
+          // Don't expose internal errors, since it may not have been intentionally thrown
           this.master._log.error('Failed to validate claim: ', err)
         )
 
@@ -801,7 +754,7 @@ export default class EthereumAccount {
     cachedChannel: ClaimablePaymentChannel | undefined,
     attempts = 0
   ): Promise<ClaimablePaymentChannel | undefined> => {
-    if (attempts > 20) {
+    if (attempts > 10) {
       this.master._log.debug(
         `Failed to validate claim: can't certify updated channel state, despite several attempts. Will not retry.`
       )
@@ -818,43 +771,9 @@ export default class EthereumAccount {
 
     // Perform checks to link a new channel
     if (!cachedChannel) {
-      /**
-       * TODO Should this also re-try if the claim value is greater than the channel value, akin to deposits?
-       * It *is* same, however, since the claimIncrement is always calculated & capped by channel capacity
-       */
-
       if (!updatedChannel) {
-        this.master._log.debug(
-          `Disregarding incoming claim: channel ${
-            claim.channelId
-          } doesn't exist (will retry in 500ms in case the block is still propagating)`
-        )
-
         await delay(500)
         return this.validateClaim(claim)(cachedChannel, attempts + 1)
-      }
-
-      // Ensure the claim is positive or zero
-      // Allow claims of 0, essentially a proof of channel ownership without sending any money
-      const hasNegativeValue = new BigNumber(claim.value).isNegative()
-      if (hasNegativeValue) {
-        this.master._log.error(`Invalid claim: value is negative`)
-        return
-      }
-
-      const isCorrectContract =
-        claim.contractAddress.toLowerCase() ===
-        this.master._contract!.options.address.toLowerCase()
-      if (!isCorrectContract) {
-        this.master._log.debug(
-          'Invalid claim: sender is using a different contract or network (e.g. testnet instead of mainnet)'
-        )
-        return
-      }
-
-      if (!isValidClaimSignature(claim, updatedChannel)) {
-        this.master._log.debug('Invalid claim: signature is invalid')
-        return
       }
 
       // Ensure the channel is to this address
@@ -868,7 +787,7 @@ export default class EthereumAccount {
             claim.channelId
           } is not ${this.master._ethereumAddress}`
         )
-        return
+        return cachedChannel
       }
 
       // Confirm the settling period for the channel is above the minimum
@@ -885,12 +804,69 @@ export default class EthereumAccount {
             this.master._minIncomingDisputePeriod
           } blocks`
         )
-        return
+        return cachedChannel
+      }
+    }
+    // An existing claim is linked, so validate this against the previous claim
+    else {
+      if (!updatedChannel) {
+        this.master._log.error(`Invalid claim: channel is unexpectedly closed`)
+        return cachedChannel
       }
 
+      // `updatedChannel` is fetched using the id in the claim, so compare
+      // against the previously linked channelId in `cachedChannel`
+      const wrongChannel = claim.channelId !== cachedChannel.channelId
+      if (wrongChannel) {
+        this.master._log.debug(
+          'Invalid claim: channel is not the previously linked channel'
+        )
+        return cachedChannel
+      }
+    }
+
+    // Ensure the claim is positive or zero
+    // Allow claims of 0, essentially a proof of channel ownership without sending any money
+    const hasNegativeValue = new BigNumber(claim.value).isNegative()
+    if (hasNegativeValue) {
+      this.master._log.error(`Invalid claim: value is negative`)
+      return cachedChannel
+    }
+
+    const wrongContract =
+      claim.contractAddress.toLowerCase() !==
+      this.master._contract!.options.address.toLowerCase()
+    if (wrongContract) {
+      this.master._log.debug(
+        'Invalid claim: sender is using a different contract or network (e.g. testnet instead of mainnet)'
+      )
+      return cachedChannel
+    }
+
+    if (!isValidClaimSignature(claim, updatedChannel)) {
+      this.master._log.debug('Invalid claim: signature is invalid')
+      return cachedChannel
+    }
+
+    const sufficientChannelValue = updatedChannel.value.isGreaterThanOrEqualTo(
+      claim.value
+    )
+    if (!sufficientChannelValue) {
+      this.master._log.debug(
+        `Disregarding incoming claim: value of ${format(
+          wei(claim.value)
+        )} is above value of channel (will retry in 500ms in case an on-chain deposit occurred)`
+      )
+
+      await delay(500)
+      return this.validateClaim(claim)(cachedChannel, attempts + 1)
+    }
+
+    // Finally, if the claim is new, ensure it isn't already linked to another account
+    // (do this last to prevent race conditions)
+    if (!cachedChannel) {
       /**
        * Ensure no channel can be linked to multiple accounts
-       * - No race condition, since linked channel will added to store cache at the end of this closure)
        * - Each channel key is a mapping of channelId -> accountName
        */
       const channelKey = `${claim.channelId}:incoming-channel`
@@ -902,7 +878,7 @@ export default class EthereumAccount {
             claim.channelId
           } is already linked to a different account`
         )
-        return
+        return cachedChannel
       }
 
       this.master._store.set(channelKey, this.account.accountName)
@@ -912,42 +888,6 @@ export default class EthereumAccount {
         }`
       )
     }
-    // An existing claim is linked, so validate this against the previous claim
-    else {
-      if (!updatedChannel) {
-        this.master._log.error(`Invalid claim: channel is unexpectedly closed`)
-        return cachedChannel
-      }
-
-      const sufficientChannelValue = updatedChannel.value.isGreaterThanOrEqualTo(
-        claim.value
-      )
-      if (!sufficientChannelValue) {
-        this.master._log.debug(
-          `Disregarding incoming claim: value of ${format(
-            wei(claim.value)
-          )} is above value of channel (will retry in 500ms in case an on-chain deposit occurred)`
-        )
-
-        await delay(500)
-        return this.validateClaim(claim)(cachedChannel, attempts + 1)
-      }
-
-      // `updatedChannel` is fetched using the id in the claim, so compare
-      // against the previously linked channelId in `cachedChannel`
-      const wrongChannel = claim.channelId !== cachedChannel.channelId
-      if (wrongChannel) {
-        this.master._log.debug(
-          'Invalid claim: channel is not the linked channel'
-        )
-        return cachedChannel
-      }
-
-      if (!isValidClaimSignature(claim, updatedChannel)) {
-        this.master._log.debug('Invalid claim: signature is invalid')
-        return cachedChannel
-      }
-    }
 
     // Cap the value of the credited claim by the total value of the channel
     const claimIncrement = BigNumber.min(
@@ -955,6 +895,7 @@ export default class EthereumAccount {
       updatedChannel.value
     ).minus(cachedChannel ? cachedChannel.spent : 0)
 
+    // Claims for zero are okay, so long as it's new channel (essentially a "proof of channel")
     const isBestClaim = claimIncrement.gt(0)
     if (!isBestClaim && cachedChannel) {
       this.master._log.debug(
@@ -1138,57 +1079,25 @@ export default class EthereumAccount {
         return updatedChannel
       }
 
-      const emitter = sendTransaction()
-
-      await new Promise((resolve, reject) => {
-        emitter.on(
-          'confirmation',
-          (confNumber: number, receipt: TransactionReceipt) => {
-            if (!receipt.status) {
-              this.master._log.error(
-                `Failed to claim channel: on-chain transaction reverted by the EVM`
-              )
-              reject()
-            } else if (confNumber >= 1) {
-              this.master._log.info(
-                `Successfully claimed channel ${channelId} for account ${
-                  this.account.accountName
-                }`
-              )
-              resolve()
-            }
-          }
-        )
-
-        emitter.on('error', (err: Error) => {
-          this.master._log.error(`Failed to claim channel: ${err.message}`)
-          reject()
-        })
+      await this.master._queueTransaction(sendTransaction).catch(err => {
+        this.master._log.error(`Failed to claim channel:`, err)
+        throw err
       })
 
-      // @ts-ignore
-      emitter.removeAllListeners()
-
       // Ensure that we've successfully fetched the updated channel details before sending a new claim
-      const refreshChannel = async (
-        attempts = 0
-      ): Promise<ClaimablePaymentChannel | undefined> => {
-        if (attempts > 20) {
-          this.master._log.error(
-            'Unable to confirm channel close after 20 attempts despite 1 block confirmation'
-          )
-          return updatedChannel
-        }
+      // TODO Handle errors?
+      const closedChannel = await this.refreshChannel(
+        updatedChannel,
+        (channel): channel is undefined => !channel
+      )()
 
-        return (
-          // Return undefined if the channel no longer exists (good!)...
-          (await fetchChannel(this.master._contract!, channelId)) &&
-          // ...or check again in 500ms if it still exists
-          delay(500).then(() => refreshChannel(attempts + 1))
-        )
-      }
+      this.master._log.debug(
+        `Successfully claimed incoming channel ${channelId} for ${format(
+          wei(spent)
+        )}`
+      )
 
-      return refreshChannel()
+      return closedChannel
     }, IncomingTaskPriority.ClaimChannel)
   }
 
@@ -1199,6 +1108,7 @@ export default class EthereumAccount {
         return
       }
 
+      // TODO The plugin-btp default `responseTimeout` is 35 seconds -- so this might fail/timeout if the tx takes longer to mine!
       return this.sendMessage({
         requestId: await generateBtpRequestId(),
         type: TYPE_MESSAGE,
@@ -1220,28 +1130,21 @@ export default class EthereumAccount {
         })
         .then(() => {
           // Ensure that the channel was successfully closed
-          const refreshChannel = async (
-            attempts = 0
-          ): Promise<PaymentChannel | undefined> => {
-            if (attempts > 60) {
-              this.master._log.error(
-                'Unable to confirm channel close after 1 minute'
-              )
-              return cachedChannel
-            }
+          // TODO Handle errors?
+          const updatedChannel = this.refreshChannel(
+            cachedChannel,
+            (channel): channel is undefined => !channel
+          )()
 
-            return (
-              // Return undefined if the channel no longer exists (good!)...
-              (await fetchChannel(
-                this.master._contract!,
-                cachedChannel.channelId
-              )) &&
-              // ...or check again in 1 sec if it still exists
-              delay(1000).then(() => refreshChannel(attempts + 1))
-            )
-          }
+          this.master._log.debug(
+            `Peer successfully closed our outgoing channel ${
+              cachedChannel.channelId
+            }, returning at least ${format(
+              wei(remainingInChannel(cachedChannel))
+            )} of collateral`
+          )
 
-          return refreshChannel()
+          return updatedChannel
         })
     })
   }
@@ -1270,5 +1173,37 @@ export default class EthereumAccount {
 
     // Garbage collect the account at the top-level
     this.master._accounts.delete(this.account.accountName)
+  }
+
+  private refreshChannel = <
+    TPaymentChannel extends PaymentChannel,
+    RPaymentChannel extends TPaymentChannel | undefined
+  >(
+    channelOrId: string | TPaymentChannel,
+    predicate: (
+      channel: TPaymentChannel | undefined
+    ) => channel is RPaymentChannel
+  ) => async (attempts = 0): Promise<RPaymentChannel> => {
+    if (attempts > 20) {
+      throw new Error(
+        'Unable to confirm updated channel state after 20 attempts despite 1 block confirmation'
+      )
+    }
+
+    const updatedChannel =
+      typeof channelOrId === 'string'
+        ? ((await fetchChannel(this.master._contract!, channelOrId).catch(
+            // Swallow errors since we'll throw if all attempts fail
+            () => undefined
+          )) as TPaymentChannel)
+        : await updateChannel(this.master._contract!, channelOrId)
+
+    return predicate(updatedChannel)
+      ? // Return the new channel if the state was updated...
+        updatedChannel
+      : // ...or check again in 1 second if wasn't updated
+        delay(1000).then(() =>
+          this.refreshChannel(channelOrId, predicate)(attempts + 1)
+        )
   }
 }
