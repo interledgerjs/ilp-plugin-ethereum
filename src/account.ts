@@ -332,7 +332,7 @@ export default class EthereumAccount {
     }
 
     const channelId = await generateChannelId()
-    const txObj = this.master._contract!.methods.open(
+    const txObj = (await this.master._contract).methods.open(
       channelId,
       this.account.ethereumAddress,
       this.master._outgoingDisputePeriod.toString()
@@ -399,7 +399,7 @@ export default class EthereumAccount {
       !!updatedChannel && updatedChannel.value.isEqualTo(totalNewValue)
 
     const channelId = channel.channelId
-    const txObj = this.master._contract!.methods.deposit(channelId)
+    const txObj = (await this.master._contract).methods.deposit(channelId)
 
     return prepareTransaction({
       txObj,
@@ -766,7 +766,7 @@ export default class EthereumAccount {
       !cachedChannel ||
       new BigNumber(claim.value).isGreaterThan(cachedChannel.value)
     const updatedChannel = shouldFetchChannel
-      ? await fetchChannel(this.master._contract!, claim.channelId) // TODO Make sure using the claim id here is safe!
+      ? await fetchChannel(await this.master._contract, claim.channelId) // TODO Make sure using the claim id here is safe!
       : cachedChannel
 
     // Perform checks to link a new channel
@@ -835,7 +835,7 @@ export default class EthereumAccount {
 
     const wrongContract =
       claim.contractAddress.toLowerCase() !==
-      this.master._contract!.options.address.toLowerCase()
+      (await this.master._contract).options.address.toLowerCase()
     if (wrongContract) {
       this.master._log.debug(
         'Invalid claim: sender is using a different contract or network (e.g. testnet instead of mainnet)'
@@ -980,7 +980,7 @@ export default class EthereumAccount {
           }
 
           const updatedChannel = await updateChannel<ClaimablePaymentChannel>(
-            this.master._contract!,
+            await this.master._contract,
             cachedChannel
           )
 
@@ -1017,7 +1017,7 @@ export default class EthereumAccount {
       }
 
       const updatedChannel = await updateChannel(
-        this.master._contract!,
+        await this.master._contract,
         cachedChannel
       )
       if (!updatedChannel) {
@@ -1046,7 +1046,7 @@ export default class EthereumAccount {
         )}`
       )
 
-      const txObj = this.master._contract!.methods.claim(
+      const txObj = (await this.master._contract).methods.claim(
         channelId,
         spent.toString(),
         signature
@@ -1192,11 +1192,11 @@ export default class EthereumAccount {
 
     const updatedChannel =
       typeof channelOrId === 'string'
-        ? ((await fetchChannel(this.master._contract!, channelOrId).catch(
+        ? ((await fetchChannel(await this.master._contract, channelOrId).catch(
             // Swallow errors since we'll throw if all attempts fail
             () => undefined
           )) as TPaymentChannel)
-        : await updateChannel(this.master._contract!, channelOrId)
+        : await updateChannel(await this.master._contract, channelOrId)
 
     return predicate(updatedChannel)
       ? // Return the new channel if the state was updated...

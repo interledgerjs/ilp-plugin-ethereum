@@ -6,7 +6,6 @@ import Contract from 'web3/eth/contract'
 import { TransactionObject } from 'web3/eth/types'
 import UNIDIRECTIONAL_MAINNET from '../abi/Unidirectional-mainnet.json'
 import UNIDIRECTIONAL_TESTNET from '../abi/Unidirectional-testnet.json'
-import PromiEvent from 'web3/promiEvent'
 import { TransactionReceipt } from 'web3/types'
 import { keccak256 } from 'js-sha3'
 import { recover } from 'eth-crypto'
@@ -92,6 +91,21 @@ export interface SerializedClaim {
   signature: string
   value: string
 }
+
+// TODO The param isn't really a PaymentChannel; it's serialized so all the bignumbers are strings
+export const deserializePaymentChannel = <
+  TPaymentChannel extends PaymentChannel
+>(
+  channel: TPaymentChannel
+): TPaymentChannel => ({
+  ...channel,
+  value: new BigNumber(channel.value),
+  disputePeriod: new BigNumber(channel.disputePeriod),
+  disputedUntil: channel.disputedUntil
+    ? new BigNumber(channel.disputedUntil)
+    : channel.disputedUntil,
+  spent: new BigNumber(channel.spent)
+})
 
 export const generateChannelId = async () =>
   '0x' + (await promisify(randomBytes)(32)).toString('hex')

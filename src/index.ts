@@ -25,7 +25,8 @@ import {
   remainingInChannel,
   spentFromChannel,
   PaymentChannel,
-  ClaimablePaymentChannel
+  ClaimablePaymentChannel,
+  deserializePaymentChannel
 } from './utils/contract'
 import ReducerQueue from './utils/queue'
 import { MemoryStore, StoreWrapper } from './utils/store'
@@ -117,7 +118,7 @@ export default class EthereumPlugin extends EventEmitter2
   readonly _store: StoreWrapper
   readonly _log: Logger
   _txPipeline: Promise<void> = Promise.resolve()
-  _contract?: Contract // Web3 contract object
+  _contract: Promise<Contract>
   _dataHandler: DataHandler = defaultDataHandler
   _moneyHandler: MoneyHandler = defaultMoneyHandler
 
@@ -157,6 +158,12 @@ export default class EthereumPlugin extends EventEmitter2
       throw new Error('Invalid Ethereum private key')
     }
 
+    this._store = new StoreWrapper(store)
+
+    this._log = log || createLogger(`ilp-plugin-ethereum-${role}`)
+    this._log.trace =
+      this._log.trace || debug(`ilp-plugin-ethereum-${role}:trace`)
+
     this._web3 = new Web3(ethereumProvider)
     this._ethereumAddress = this._web3.eth.accounts.wallet.add(
       ethereumPrivateKey
@@ -164,11 +171,12 @@ export default class EthereumPlugin extends EventEmitter2
     this._privateKey = ethereumPrivateKey.slice(2)
     this._getGasPrice = getGasPrice || (() => this._web3.eth.getGasPrice())
 
-    this._store = new StoreWrapper(store)
-
-    this._log = log || createLogger(`ilp-plugin-ethereum-${role}`)
-    this._log.trace =
-      this._log.trace || debug(`ilp-plugin-ethereum-${role}:trace`)
+    // Cache the ABI/address of the contract corresponding to the chain we're connected to
+    // If this promise rejects, connect() will also reject since loading accounts await this
+    this._contract = getContract(this._web3).catch(err => {
+      this._log.error('Failed to load contract ABI and address:', err)
+      throw err
+    })
 
     this._outgoingChannelAmount = convert(gwei(outgoingChannelAmount), wei())
       .abs()
@@ -234,6 +242,8 @@ export default class EthereumPlugin extends EventEmitter2
   async _loadAccount(accountName: string): Promise<EthereumAccount> {
     const accountKey = `${accountName}:account`
     await this._store.loadObject(accountKey)
+
+    // TODO Add much more robust deserialization from store
     const accountData = this._store.getObject(accountKey) as (
       | SerializedAccountData
       | undefined)
@@ -260,18 +270,18 @@ export default class EthereumPlugin extends EventEmitter2
           ),
           incoming: new ReducerQueue(
             accountData && accountData.incoming
-              ? await updateChannel(this._contract!, {
-                  ...accountData.incoming,
-                  spent: new BigNumber(accountData.incoming.spent)
-                })
+              ? await updateChannel(
+                  await this._contract,
+                  deserializePaymentChannel(accountData.incoming)
+                )
               : undefined
           ),
           outgoing: new ReducerQueue(
             accountData && accountData.outgoing
-              ? await updateChannel(this._contract!, {
-                  ...accountData.outgoing,
-                  spent: new BigNumber(accountData.outgoing.spent)
-                })
+              ? await updateChannel(
+                  await this._contract,
+                  deserializePaymentChannel(accountData.outgoing)
+                )
               : undefined
           )
         },
@@ -295,9 +305,6 @@ export default class EthereumPlugin extends EventEmitter2
   }
 
   async connect() {
-    // Cache the ABI/address of the contract corresponding to the chain we're connected to
-    this._contract = await getContract(this._web3)
-
     // Load all accounts from the store
     await this._store.loadObject('accounts')
     const accounts =
