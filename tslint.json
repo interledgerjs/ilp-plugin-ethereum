@@ -1,8 +1,9 @@
 {
-  "extends": "tslint-config-standard",
-  "rules" : {
-    "no-unused-variable": false
-  },
+  "extends": [
+    "tslint-config-standard",
+    "tslint-eslint-rules",
+    "tslint-config-prettier"
+  ],
   "linterOptions": {
     "exclude": ["src/**/*.json"]
   }

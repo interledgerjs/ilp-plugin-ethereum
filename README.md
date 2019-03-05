@@ -22,100 +22,88 @@ npm install ilp-plugin-ethereum@next
 
 Here are the available options to pass to the plugin. Additional configuration options are also inherited from [ilp-plugin-btp](https://github.com/interledgerjs/ilp-plugin-btp) if the plugin is a client, and [ilp-plugin-mini-accounts](https://github.com/interledgerjs/ilp-plugin-mini-accounts) if the plugin is a server.
 
-This plugin uses an asset scale of 9 and units of *gwei*, and **not** 18, or wei, as wei is such a small unit that it introduced issues calculating the exchange rate.
+This plugin uses an asset scale of 9 and units of _gwei_, and **not** 18, or wei, as wei is such a small unit that it introduced issues calculating the exchange rate.
 
 #### `ethereumPrivateKey`
+
 - **Required**
 - Type: `string`
 - Private key of the Ethereum account used to sign transactions, corresponding to the address which peers must open channels to
 
 #### `ethereumProvider`
+
 - Type: `string` or [`Web3.Provider`](https://web3js.readthedocs.io/en/1.0/web3.html#providers)
 - Default: `"wss://mainnet.infura.io/ws"`
 - [Web3 1.0 provider](https://web3js.readthedocs.io/en/1.0/web3.html#providers) used to connect to an Ethereum node
 
 #### `role`
+
 - Type:
   - `"client"` to connect to a single peer or server that is explicity specified
   - `"server"` to enable multiple clients to openly connect to the plugin
 - Default: `"client"`
 
-#### `closeOnDisconnect`
-- Type: `boolean`
-- Default (role=`"server"`): `false`
-- Default (role=`"client"`): `true`
-- Claims incoming channels when the plugin or peer disconnects, and requests the peer to close any outgoing channels
+### Settlement
+
+Clients do not automatically open channels, nor settle automatically. Channels must be funded or closed through the internal API of the plugin. Sending payment channel claims can be triggered by invoking `sendMoney` on the plugin, and the money handler is called upon receipt of incoming payment channel claims (set using `registerMoneyHandler`).
+
+Servers _do_ automatically open channels. If a client has opened a channel with a value above the configurable `minIncomingChannelAmount`, the server will automatically open a channel back to the client with a value of `outgoingChannelAmount`. When the channel is half empty, the server will also automatically top up the value of the channel to the `outgoingChannelAmount`.
+
+The balance configuration has been simplified for servers. Clients must prefund before sending any packets through a server, and if a client fulfills packets sent to them through a server, the server will automatically settle such that they owe 0 to the client. This configuration was chosen as a default due to it's security and protection against deadlocks.
+
+### Closing Channels
+
+Both clients and servers operate a channel watcher to automatically close a disputed channel if it's profitable to do so, and both will automatically claim channels if the other peer requests one to be closed.
+
+### Transaction Fees
+
+In the current version of this plugin, there is no accounting for transaction fees on servers. In previous versions, transaction fees where added to the client's balance, which forced them to prefund the fee, but this made accounting nearly impossible from the client's perspective: it was opaque, and there was no negotiation. The balances of the two peers would quickly get out of sync.
+
+Since clients must manually open & close channels, they do have the ability to authorize transaction fees before sending them to the chain.
+
+### Future Work
+
+The current model introduces problems with locking up excessive liquidity for servers, and doesn't provide sufficient denial of service protections against transaction fees. Ultimately, clients will likely have to purchase incoming capacity (possibly by amount and/or time) through prefunding the server, and pay for the server's transaction fees to open and close a channel back to them. However, this may require a more complex negotiation and fee logic that is nontrivial to implement.
+
+The ILP connector/plugin architecture is likely going to be refactored in the near future, which should simplify the external interface, enable multi-process plugins, and eliminate some of the internal boilerplate code.
+
+#### `maxPacketAmount`
+
+- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
+- Default: `Infinity`
+- Maximum amount in _gwei_ above which an incoming packet should be rejected
+
+#### `outgoingChannelAmount`
+
+- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
+- Default: `50000000` gwei, or 0.05 ether
+- Amount in _gwei_ to use as a default to fund an outgoing channel up to
+- Note: this is primarily relevant to servers, since clients that don't automatically open channels may manually specify the amount
+
+#### `minIncomingChannelAmount`
+
+- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
+- Default: `Infinity` gwei (channels will never automatically be opened)
+- Value in _gwei_ that a peer's incoming channel must exceed if an outgoing channel to the peer should be automatically opened
 
 #### `channelWatcherInterval`
+
 - Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
 - Default `60000` ms, or 1 minute
 - Number of milliseconds between each run of the channel watcher, which checks if the peer started a dispute and if so, claims the channel if it's profitable
 
-#### `outgoingChannelAmount`
+#### `outgoingDisputePeriod`
+
 - Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
-- Default: `40000000` gwei, or 0.04 ether
-- Amount in *gwei* to to use as a default to fund or deposit to an outgoing channel
+- Default: `34560` blocks, or approximately 6 days, assuming 15 second blocks
+- Number of blocks for dispute period when opening new outgoing channels
 
-#### `incomingChannelFee`
+While the channel is open, the sender may begin the dispute period. If the receiver does not claim the channel before the specified number of blocks elapses and the settling period ends, all the funds can go back to the sender. Settling a channel can be useful if the receiver is unresponsive or excessive collateral is locked up.
+
+#### `minIncomingDisputePeriod`
+
 - Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
-- Default: `0` gwei
-- Fee collected when a new channel is first linked to an account, added to the balance of the peer prior to accepting the claim
+- Default: `17280` blocks, or approximately 3 days, assuming 15 second blocks
+- Minimum number of blocks for the dispute period in order to accept an incoming channel
 
-A connector may charge such a fee to cover the cost of their transaction fee to later claim the channel. For example, if they received a claim for 1 gwei, they'd never be able to claim the channel, since the transaction fee would likely be far greater than the value of the claim, and therefore it wouldn't be worth their while to forward 1 gwei worth of payments.
-
-#### `outgoingSettlementPeriod`
-- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
-- Default (role=`"server"`): `34560` blocks, or approximately 6 days, assuming 15 second blocks
-- Default (role=`"client"`): `11520` blocks, or approximately 2 days, assuming 15 second blocks
-- Number of blocks for settlement period when opening new outgoing channels
-
-While the channel is open, the sender may begin the settlement period. If the receiver does not claim the channel before the specified number of blocks elapses and the settling period ends, all the funds can go back to the sender. Settling a channel can be useful if the receiver is unresponsive or excessive collateral is locked up.
-
-#### `minIncomingSettlementPeriod`
-- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
-- Default (role=`"server"`): `5760` blocks, or approximately 1 day, assuming 15 second blocks
-- Default (role=`"client"`): `17280` blocks, or approximately 3 days, assuming 15 second blocks
-- Minimum number of blocks for the settlement period in order to accept an incoming channel
-
-In case the sender starts settling, the receiver may want to allot themselves enough time to claim the channel. Incoming claims from channels with settlement periods below this floor will be rejected outright.
-
-#### `maxPacketAmount`
-- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
-- Default: `Infinity`
-- Maximum amount in *gwei* above which an incoming packet should be rejected
-
-#### `balance`
-
-The balance (positive) is the net amount the counterparty/peer owes an instance of the plugin. A negative balance implies the plugin owes money to the counterparty.
-
-Contrary to other plugins that require the balance middleware in [ilp-connector](https://github.com/interledgerjs/ilp-connector/) to trigger settlement, here, all the balance configuration is internal to the plugin. `sendMoney` is a no-operation on both the client and the server.
-
-Thus, pre-funding—sending money to the peer *before* forwarding packets through them—requires a positive `settleTo` amount, and post-funding—settling *after* forwarding packets through them—requires a 0 or negative `settleTo` amount.
-
-In this model, it is the sender's responsibility to fund above the fee its peer charges to accept a new incoming channel (up to `settleTo`), and it is the receiver's responsibility to fulfill packets above what its peer charges to open a new channel (up to `maximum`). Furthermore, even when using the plugin as a client, the fees to fund outgoing channels are debited (added) to the peer's balance, and must be accounted for in the `settleTo` amount.
-
-All the following balance options are in units of *gwei*.
-
-##### `maximum`
-- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
-- Default: `Infinity`
-- Maximum balance the counterparty owes this instance before further balance additions are rejected (e.g. settlements and forwarding of PREPARE packets with debits that increase balance above maximum the would be rejected)
-- Must be greater than or equal to settleTo amount
-
-##### `settleTo`
-- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
-- Default: `0`
-- Settlement attempts will increase the balance to this amount
-- Must be greater than or equal to settleThreshold
-
-##### `settleThreshold`
-- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
-- Default: `-Infinity`
-- Automatically attempts to settle when the balance drops below this threshold (exclusive)
-- By default, auto settlement is disabled, and the plugin is in receive-only mode
-- Must be greater than or equal to the minimum balance
-
-##### `minimum`
-- Type: [`BigNumber`](http://mikemcl.github.io/bignumber.js/), `number`, or `string`
-- Default: `-Infinity`
-- Maximum this instance owes the counterparty before further balance subtractions are rejected (e.g. incoming money/claims and forwarding of FULFILL packets with credits that reduce balance below minimum would be rejected)
+In case the sender starts settling, the receiver may want to allot themselves enough time to claim the channel. Incoming claims from channels with dispute periods below this floor will be rejected outright.

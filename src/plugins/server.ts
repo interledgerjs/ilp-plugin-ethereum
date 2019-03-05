@@ -1,10 +1,10 @@
 import EthereumAccount from '../account'
-import { PluginInstance, PluginServices } from '../utils/types'
+import { PluginInstance, PluginServices } from '../types/plugin'
 import MiniAccountsPlugin from 'ilp-plugin-mini-accounts'
 import { ServerOptions } from 'ws'
 import { IldcpResponse } from 'ilp-protocol-ildcp'
 import { BtpPacket, BtpSubProtocol } from 'ilp-plugin-btp'
-import { IlpPacket, IlpPrepare, Type } from 'ilp-packet'
+import { IlpPacket, IlpPrepare, Type, isPrepare } from 'ilp-packet'
 
 export interface MiniAccountsOpts {
   port?: number
@@ -18,15 +18,15 @@ export interface EthereumServerOpts extends MiniAccountsOpts {
   loadAccount: (accountName: string) => Promise<EthereumAccount>
 }
 
-export class EthereumServerPlugin extends MiniAccountsPlugin implements PluginInstance {
+export class EthereumServerPlugin extends MiniAccountsPlugin
+  implements PluginInstance {
   private getAccount: (address: string) => EthereumAccount
   private loadAccount: (address: string) => Promise<EthereumAccount>
 
-  constructor ({
-    getAccount,
-    loadAccount,
-    ...opts
-  }: EthereumServerOpts, api: PluginServices) {
+  constructor(
+    { getAccount, loadAccount, ...opts }: EthereumServerOpts,
+    api: PluginServices
+  ) {
     super(opts, api)
 
     this.getAccount = (address: string) =>
@@ -35,36 +35,41 @@ export class EthereumServerPlugin extends MiniAccountsPlugin implements PluginIn
       loadAccount(this.ilpAddressToAccount(address))
   }
 
-  _sendMessage (accountName: string, message: BtpPacket) {
+  _sendMessage(accountName: string, message: BtpPacket) {
     return this._call(this._prefix + accountName, message)
   }
 
-  async _connect (address: string, message: BtpPacket): Promise<void> {
-    const account = await this.loadAccount(address)
-    return account.connect()
+  async _connect(address: string, message: BtpPacket): Promise<void> {
+    await this.loadAccount(address)
   }
 
-  _handleCustomData = async (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> => {
+  _handleCustomData = async (
+    from: string,
+    message: BtpPacket
+  ): Promise<BtpSubProtocol[]> => {
     return this.getAccount(from).handleData(message)
-  }
-
-  async _handleMoney (from: string, message: BtpPacket): Promise<BtpSubProtocol[]> {
-    return this.getAccount(from).handleMoney(message)
   }
 
   _handlePrepareResponse = async (
     destination: string,
     responsePacket: IlpPacket,
     preparePacket: {
-      type: Type.TYPE_ILP_PREPARE,
-      typeString?: 'ilp_prepare',
+      type: Type.TYPE_ILP_PREPARE
+      typeString?: 'ilp_prepare'
       data: IlpPrepare
     }
   ) => {
-    return this.getAccount(destination).handlePrepareResponse(preparePacket, responsePacket)
+    if (isPrepare(responsePacket.data)) {
+      throw new Error('Received PREPARE in response to PREPARE')
+    }
+
+    return this.getAccount(destination).handlePrepareResponse(
+      preparePacket.data,
+      responsePacket.data
+    )
   }
 
-  async _close (from: string): Promise<void> {
+  async _close(from: string): Promise<void> {
     return this.getAccount(from).disconnect()
   }
 }

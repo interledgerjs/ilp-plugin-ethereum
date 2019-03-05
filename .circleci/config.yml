@@ -10,9 +10,9 @@ jobs:
       # Download and cache dependencies
       - restore_cache:
           keys:
-          - v10-dependencies-{{ checksum "package.json" }}
-          # fallback to using the latest cache if no exact match is found
-          - v10-dependencies-
+            - v10-dependencies-{{ checksum "package.json" }}
+            # fallback to using the latest cache if no exact match is found
+            - v10-dependencies-
       - run:
           name: Install dependencies
           command: npm install
@@ -36,36 +36,6 @@ jobs:
           root: ~/repo
           paths: .
 
-  # Make sure the tests work on Node v8 as well
-  build_node_v8:
-    docker:
-      - image: circleci/node:8
-    working_directory: ~/repo_v8
-    steps:
-      - checkout
-      # Download and cache dependencies
-      - restore_cache:
-          keys:
-          - v8-dependencies-{{ checksum "package.json" }}
-          # fallback to using the latest cache if no exact match is found
-          - v8-dependencies-
-      - run:
-          name: Install dependencies
-          command: npm install
-      - save_cache:
-          paths:
-            - node_modules
-          key: v8-dependencies-{{ checksum "package.json" }}
-      - run:
-          name: Build and compile
-          command: npm run build
-      - run:
-          name: Run tests
-          command: npm test
-      - run:
-          name: Lint files
-          command: npm run lint
-
   publish:
     docker:
       - image: circleci/node:10
@@ -88,15 +58,9 @@ workflows:
           filters:
             tags:
               only: /.*/
-      - build_node_v8:
-          requires:
-            - build
-          filters:
-            tags:
-              only: /.*/
       - publish:
           requires:
-            - build_node_v8
+            - build
           filters:
             tags:
               only: /^v.*/
