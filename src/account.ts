@@ -754,13 +754,6 @@ export default class EthereumAccount {
     cachedChannel: ClaimablePaymentChannel | undefined,
     attempts = 0
   ): Promise<ClaimablePaymentChannel | undefined> => {
-    if (attempts > 10) {
-      this.master._log.debug(
-        `Failed to validate claim: can't certify updated channel state, despite several attempts. Will not retry.`
-      )
-      return cachedChannel
-    }
-
     // To reduce latency, only fetch channel state if no channel was linked, or there was a possible on-chain deposit
     const shouldFetchChannel =
       !cachedChannel ||
@@ -772,6 +765,15 @@ export default class EthereumAccount {
     // Perform checks to link a new channel
     if (!cachedChannel) {
       if (!updatedChannel) {
+        if (attempts > 10) {
+          this.master._log.debug(
+            `Invalid claim: channel ${
+              claim.channelId
+            } doesn't exist, despite several attempts to refresh channel state`
+          )
+          return cachedChannel
+        }
+
         await delay(500)
         return this.validateClaim(claim)(cachedChannel, attempts + 1)
       }
@@ -852,11 +854,14 @@ export default class EthereumAccount {
       claim.value
     )
     if (!sufficientChannelValue) {
-      this.master._log.debug(
-        `Disregarding incoming claim: value of ${format(
-          wei(claim.value)
-        )} is above value of channel (will retry in 500ms in case an on-chain deposit occurred)`
-      )
+      if (attempts > 10) {
+        this.master._log.debug(
+          `Invalid claim: value of ${format(
+            wei(claim.value)
+          )} is above value of channel, despite several attempts to refresh channel state`
+        )
+        return cachedChannel
+      }
 
       await delay(500)
       return this.validateClaim(claim)(cachedChannel, attempts + 1)
