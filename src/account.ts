@@ -41,7 +41,8 @@ import {
   SerializedClaim,
   spentFromChannel,
   updateChannel,
-  createPaymentDigest
+  createPaymentDigest,
+  hasClaim
 } from './utils/contract'
 import ReducerQueue from './utils/queue'
 
@@ -957,19 +958,25 @@ export default class EthereumAccount {
         )}`
       )
       this.account.payableBalance = this.account.payableBalance.plus(amount)
+
+      this.sendMoney().catch((err: Error) =>
+        this.master._log.debug('Error queueing outgoing settlement: ', err)
+      )
     } else if (isReject(reply)) {
       this.master._log.debug(
         `Received a ${reply.code} REJECT in response to the forwarded PREPARE`
       )
-    }
 
-    // Attempt to settle on fulfills *and* T04s (to resolve stalemates)
-    const shouldSettle =
-      isFulfill(reply) || (isReject(reply) && reply.code === 'T04')
-    if (shouldSettle) {
-      this.sendMoney().catch((err: Error) =>
-        this.master._log.debug('Error queueing outgoing settlement: ', err)
-      )
+      // On T04s, send the most recent claim to the peer in case they didn't get it
+      const outgoingChannel = this.account.outgoing.state
+      if (reply.code === 'T04' && hasClaim(outgoingChannel)) {
+        this.sendClaim(outgoingChannel).catch((err: Error) =>
+          this.master._log.debug(
+            'Failed to send latest claim to peer on T04 error:',
+            err
+          )
+        )
+      }
     }
   }
 
