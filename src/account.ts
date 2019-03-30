@@ -854,12 +854,8 @@ export default class EthereumAccount {
       return cachedChannel
     }
 
-    /**
-     * The contract address case must match EXACTLY, since the contract uses
-     * the lowercase address to check the payment digest!
-     */
     const wrongContract =
-      claim.contractAddress !==
+      claim.contractAddress.toLowerCase() !==
       (await this.master._contract).address.toLowerCase()
     if (wrongContract) {
       this.master._log.debug(
