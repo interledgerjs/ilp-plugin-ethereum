@@ -32,9 +32,14 @@ This plugin uses an asset scale of 9 and units of _gwei_, and **not** 18, or wei
 
 #### `ethereumProvider`
 
-- Type: `string` or [`Web3.Provider`](https://web3js.readthedocs.io/en/1.0/web3.html#providers)
-- Default: `"wss://mainnet.infura.io/ws"`
-- [Web3 1.0 provider](https://web3js.readthedocs.io/en/1.0/web3.html#providers) used to connect to an Ethereum node
+- Type:
+  - `"homestead"` to use Infura & Etherscan on mainnet
+  - `"ropsten"` to use Infura & Etherscan on the Ropsten proof of work testnet
+  - `"kovan"` to use Infura & Etherscan on the Kovan proof of authority testnet (Parity)
+  - `"rinkeby"` to use Infura & Etherscan on the Rinkeby proof of authority testnet (Geth)
+  - [`ethers.providers.Provider`](https://docs.ethers.io/ethers.js/html/api-providers.html) to supply a custom provider
+- Default: `"homestead"`
+- [Ethers provider](https://docs.ethers.io/ethers.js/html/api-providers.html) used to connect to an Ethereum node for a particular chain/testnet
 
 #### `role`
 

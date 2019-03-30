@@ -13,7 +13,7 @@ import {
   TYPE_MESSAGE
 } from 'btp-packet'
 import { randomBytes } from 'crypto'
-import { sign } from 'eth-crypto'
+import { ethers } from 'ethers'
 import {
   deserializeIlpPrepare,
   deserializeIlpReply,
@@ -26,13 +26,14 @@ import {
 } from 'ilp-packet'
 import { BtpPacket, BtpPacketData, BtpSubProtocol } from 'ilp-plugin-btp'
 import { promisify } from 'util'
-import Web3 from 'web3'
 import EthereumPlugin from '.'
 import { DataHandler, MoneyHandler } from './types/plugin'
 import {
   ClaimablePaymentChannel,
+  createPaymentDigest,
   fetchChannel,
   generateChannelId,
+  hasClaim,
   isDisputed,
   isValidClaimSignature,
   PaymentChannel,
@@ -41,8 +42,7 @@ import {
   SerializedClaim,
   spentFromChannel,
   updateChannel,
-  createPaymentDigest,
-  hasClaim
+  hexToBuffer
 } from './utils/contract'
 import ReducerQueue from './utils/queue'
 
@@ -109,8 +109,7 @@ export interface AccountData {
 }
 
 enum IncomingTaskPriority {
-  ClaimChannel = 3,
-  ChannelWatcher = 2,
+  ClaimChannel = 2,
   ValidateClaim = 1
 }
 
@@ -197,7 +196,7 @@ export default class EthereumAccount {
               contentType: MIME_APPLICATION_JSON,
               data: Buffer.from(
                 JSON.stringify({
-                  ethereumAddress: this.master._ethereumAddress
+                  ethereumAddress: this.master._wallet.address
                 })
               )
             }
@@ -237,7 +236,7 @@ export default class EthereumAccount {
         )
       }
 
-      if (!Web3.utils.isAddress(ethereumAddress)) {
+      if (!ethers.utils.getAddress(ethereumAddress)) {
         return this.master._log.debug(
           `Failed to link Ethereum address: not a valid address`
         )
@@ -333,17 +332,17 @@ export default class EthereumAccount {
     }
 
     const channelId = await generateChannelId()
-    const txObj = (await this.master._contract).methods.open(
-      channelId,
-      this.account.ethereumAddress,
-      this.master._outgoingDisputePeriod.toString()
-    )
 
     const { sendTransaction, txFee } = await prepareTransaction({
-      txObj,
-      value,
-      from: this.master._ethereumAddress,
-      gasPrice: await this.master._getGasPrice()
+      methodName: 'open',
+      params: [
+        channelId,
+        this.account.ethereumAddress,
+        this.master._outgoingDisputePeriod.toString()
+      ],
+      contract: await this.master._contract,
+      gasPrice: await this.master._getGasPrice(),
+      value
     })
 
     await authorize(txFee)
@@ -360,7 +359,8 @@ export default class EthereumAccount {
     })
 
     // Ensure that we've successfully fetched the channel details before sending a claim
-    return this.refreshChannel(
+    // TODO Handle errors from refresh channel
+    const newChannel = this.refreshChannel(
       channelId,
       (channel): channel is PaymentChannel => !!channel
     )().then(
@@ -377,8 +377,11 @@ export default class EthereumAccount {
           .then(() => channel)
     )
 
-    // TODO Handle errors from refresh channel
-    // TODO Log that the channel was successfully created
+    this.master._log.debug(
+      `Successfully opened channel ${channelId} for ${format(wei(value))}`
+    )
+
+    return newChannel
   }
 
   /**
@@ -400,13 +403,13 @@ export default class EthereumAccount {
       !!updatedChannel && updatedChannel.value.isEqualTo(totalNewValue)
 
     const channelId = channel.channelId
-    const txObj = (await this.master._contract).methods.deposit(channelId)
 
     return prepareTransaction({
-      txObj,
-      value,
-      from: channel.sender,
-      gasPrice: await this.master._getGasPrice()
+      methodName: 'deposit',
+      params: [channelId],
+      contract: await this.master._contract,
+      gasPrice: await this.master._getGasPrice(),
+      value
     })
       .then(async ({ sendTransaction, txFee }) => {
         await authorize(txFee)
@@ -552,8 +555,13 @@ export default class EthereumAccount {
   }
 
   signClaim(value: BigNumber, cachedChannel: PaymentChannel): PaymentChannel {
-    const signature = sign(
-      this.master._privateKey,
+    const secp256k1 = this.master._secp256k1!
+
+    const {
+      signature,
+      recoveryId
+    } = secp256k1.signMessageHashRecoverableCompact(
+      hexToBuffer(this.master._wallet.privateKey),
       createPaymentDigest(
         cachedChannel.contractAddress,
         cachedChannel.channelId,
@@ -561,10 +569,18 @@ export default class EthereumAccount {
       )
     )
 
+    /**
+     * Ethereum requires RLP encoding, not supported by bitcoin-ts:
+     *  - https://ethereum.stackexchange.com/questions/64380/understanding-ethereum-signatures
+     *  - https://docs.ethers.io/ethers.js/html/api-utils.html#signatures
+     */
+    const v = recoveryId === 1 ? '1c' : '1b'
+    const flatSignature = '0x' + Buffer.from(signature).toString('hex') + v
+
     return {
       ...cachedChannel,
       spent: value,
-      signature
+      signature: flatSignature
     }
   }
 
@@ -608,7 +624,7 @@ export default class EthereumAccount {
           contentType: MIME_APPLICATION_JSON,
           data: Buffer.from(
             JSON.stringify({
-              ethereumAddress: this.master._ethereumAddress
+              ethereumAddress: this.master._wallet.address
             })
           )
         }
@@ -783,12 +799,12 @@ export default class EthereumAccount {
       // (only check for new channels, not per claim, in case the server restarts and changes config)
       const amReceiver =
         updatedChannel.receiver.toLowerCase() ===
-        this.master._ethereumAddress.toLowerCase()
+        this.master._wallet.address.toLowerCase()
       if (!amReceiver) {
         this.master._log.debug(
           `Invalid claim: the recipient for new channel ${
             claim.channelId
-          } is not ${this.master._ethereumAddress}`
+          } is not ${this.master._wallet.address}`
         )
         return cachedChannel
       }
@@ -828,17 +844,23 @@ export default class EthereumAccount {
       }
     }
 
-    // Ensure the claim is positive or zero
-    // Allow claims of 0, essentially a proof of channel ownership without sending any money
+    /**
+     * Ensure the claim is positive or zero
+     * - Allow claims of 0 (essentially a proof of channel ownership without sending any money)
+     */
     const hasNegativeValue = new BigNumber(claim.value).isNegative()
     if (hasNegativeValue) {
       this.master._log.error(`Invalid claim: value is negative`)
       return cachedChannel
     }
 
+    /**
+     * The contract address case must match EXACTLY, since the contract uses
+     * the lowercase address to check the payment digest!
+     */
     const wrongContract =
-      claim.contractAddress.toLowerCase() !==
-      (await this.master._contract).options.address.toLowerCase()
+      claim.contractAddress !==
+      (await this.master._contract).address.toLowerCase()
     if (wrongContract) {
       this.master._log.debug(
         'Invalid claim: sender is using a different contract or network (e.g. testnet instead of mainnet)'
@@ -846,7 +868,11 @@ export default class EthereumAccount {
       return cachedChannel
     }
 
-    if (!isValidClaimSignature(claim, updatedChannel)) {
+    const isSigned = isValidClaimSignature(this.master._secp256k1!)(
+      claim,
+      updatedChannel
+    )
+    if (!isSigned) {
       this.master._log.debug('Invalid claim: signature is invalid')
       return cachedChannel
     }
@@ -981,40 +1007,32 @@ export default class EthereumAccount {
   }
 
   private startChannelWatcher() {
-    const timer: NodeJS.Timeout = setInterval(
-      () =>
-        this.account.incoming.add(async cachedChannel => {
-          // No channel & claim are linked: stop the channel watcher
-          if (!cachedChannel) {
-            this.watcher = null
-            clearInterval(timer)
-            return cachedChannel
-          }
+    const timer: NodeJS.Timeout = setInterval(async () => {
+      const cachedChannel = this.account.incoming.state
+      // No channel & claim are linked: stop the channel watcher
+      if (!cachedChannel) {
+        this.watcher = null
+        clearInterval(timer)
+        return
+      }
 
-          const updatedChannel = await updateChannel<ClaimablePaymentChannel>(
-            await this.master._contract,
-            cachedChannel
+      const updatedChannel = await updateChannel<ClaimablePaymentChannel>(
+        await this.master._contract,
+        cachedChannel
+      )
+
+      // If the channel is closed or closing, then add a task to the queue
+      // that will update the channel state (for real) and claim if it's closing
+      if (!updatedChannel || isDisputed(updatedChannel)) {
+        this.claimIfProfitable(true).catch((err: Error) => {
+          this.master._log.debug(
+            `Error attempting to claim channel or confirm channel was closed: ${
+              err.message
+            }`
           )
-
-          // Channel is closed: stop the channel watcher
-          if (!updatedChannel) {
-            this.watcher = null
-            clearInterval(timer)
-            return updatedChannel
-          }
-
-          if (isDisputed(updatedChannel)) {
-            this.claimIfProfitable(true).catch((err: Error) => {
-              this.master._log.debug(
-                `Error attempting to claim channel: ${err.message}`
-              )
-            })
-          }
-
-          return updatedChannel
-        }, IncomingTaskPriority.ChannelWatcher),
-      this.master._channelWatcherInterval.toNumber()
-    )
+        })
+      }
+    }, this.master._channelWatcherInterval.toNumber())
 
     return timer
   }
@@ -1058,15 +1076,10 @@ export default class EthereumAccount {
         )}`
       )
 
-      const txObj = (await this.master._contract).methods.claim(
-        channelId,
-        spent.toString(),
-        signature
-      )
-
       const { sendTransaction, txFee } = await prepareTransaction({
-        txObj,
-        from: updatedChannel.receiver,
+        methodName: 'claim',
+        params: [channelId, spent.toString(), signature],
+        contract: await this.master._contract,
         gasPrice: await this.master._getGasPrice()
       })
 

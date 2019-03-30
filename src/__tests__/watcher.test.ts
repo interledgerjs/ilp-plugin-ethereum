@@ -1,4 +1,3 @@
-import Web3 from 'web3'
 import getPort from 'get-port'
 import EthereumPlugin from '..'
 import { getContract, prepareTransaction } from '../utils/contract'
@@ -9,11 +8,6 @@ import { convert, eth, gwei, wei } from '@kava-labs/crypto-rate-utils'
 test(`channel watcher claims settling channel if it's profitable`, async t => {
   t.plan(1)
 
-  const ethereumProvider = new Web3.providers.HttpProvider(
-    process.env.ETHEREUM_PROVIDER!
-  )
-  const web3 = new Web3(ethereumProvider)
-
   const port = await getPort()
 
   const clientStore = new MemoryStore()
@@ -21,7 +15,7 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
     {
       role: 'client',
       ethereumPrivateKey: process.env.PRIVATE_KEY_A!,
-      ethereumProvider,
+      ethereumProvider: 'kovan',
       server: `btp+ws://userA:secretA@localhost:${port}`
     },
     {
@@ -35,7 +29,7 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
       {
         role: 'server',
         ethereumPrivateKey: process.env.PRIVATE_KEY_B!,
-        ethereumProvider,
+        ethereumProvider: 'kovan',
         channelWatcherInterval: 5000, // Every 5 sec
         debugHostIldcpInfo: {
           assetCode: 'ETH',
@@ -74,24 +68,11 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
     'peer:account'
   )) as string).outgoing.channelId as string
 
-  const contract = await getContract(web3)
-
-  contract.events
-    .DidClaim({
-      fromBlock: 'latest',
-      filter: { channelId }
-    })
-    .on('data', () => t.pass('successfully claimed settling channel'))
-
-  const address = web3.eth.accounts.wallet.add(process.env.PRIVATE_KEY_A!)
-    .address
-
-  const txObj = contract.methods.startSettling(channelId)
-  const gasPrice = await web3.eth.getGasPrice()
   const { sendTransaction } = await prepareTransaction({
-    gasPrice,
-    txObj,
-    from: address
+    methodName: 'startSettling',
+    params: [channelId],
+    contract: await clientPlugin._contract,
+    gasPrice: await clientPlugin._getGasPrice()
   })
 
   await sendTransaction()
@@ -101,7 +82,8 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
 
   await new Promise(resolve => {
     const interval = setInterval(async () => {
-      const wasClaimed = await contract.methods.isAbsent(channelId).call()
+      const contract = await serverPlugin._contract
+      const wasClaimed = await contract.functions.isAbsent(channelId)
 
       if (wasClaimed) {
         clearInterval(interval)

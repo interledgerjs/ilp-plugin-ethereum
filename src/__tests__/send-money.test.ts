@@ -2,15 +2,10 @@ import getPort from 'get-port'
 import EthereumPlugin from '..'
 import BigNumber from 'bignumber.js'
 import test from 'ava'
-import Web3 from 'web3'
 import createLogger from 'ilp-logger'
 import { convert, eth, gwei, wei } from '@kava-labs/crypto-rate-utils'
 
 test('money can be sent between two peers', async t => {
-  const ethereumProvider = new Web3.providers.HttpProvider(
-    process.env.ETHEREUM_PROVIDER!
-  )
-
   const port = await getPort()
 
   const clientPlugin = new EthereumPlugin(
@@ -18,7 +13,7 @@ test('money can be sent between two peers', async t => {
       role: 'client',
       server: `btp+ws://:secret@localhost:${port}`,
       ethereumPrivateKey: process.env.PRIVATE_KEY_A!,
-      ethereumProvider
+      ethereumProvider: 'kovan'
     },
     {
       log: createLogger('ilp-plugin-ethereum:client')
@@ -33,7 +28,7 @@ test('money can be sent between two peers', async t => {
         secret: 'secret'
       },
       ethereumPrivateKey: process.env.PRIVATE_KEY_B!,
-      ethereumProvider
+      ethereumProvider: 'kovan'
     },
     {
       log: createLogger('ilp-plugin-ethereum:server')
