@@ -157,10 +157,7 @@ export default class EthereumPlugin extends EventEmitter2
     this._wallet = new ethers.Wallet(ethereumPrivateKey, provider)
 
     this._store = new StoreWrapper(store)
-
     this._log = log || createLogger(`ilp-plugin-ethereum-${role}`)
-    this._log.trace =
-      this._log.trace || debug(`ilp-plugin-ethereum-${role}:trace`)
 
     this._getGasPrice = async () =>
       new BigNumber(
@@ -313,7 +310,7 @@ export default class EthereumPlugin extends EventEmitter2
       (this._store.getObject('accounts') as string[] | void) || []
 
     for (const accountName of accounts) {
-      this._log.trace(`Loading account ${accountName} from store`)
+      this._log.debug(`Loading account ${accountName} from store`)
       await this._loadAccount(accountName)
 
       // Throttle loading accounts to ~100 per second
