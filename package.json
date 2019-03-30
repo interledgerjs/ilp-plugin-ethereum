@@ -42,6 +42,8 @@
   "homepage": "https://github.com/interledgerjs/ilp-plugin-ethereum#readme",
   "dependencies": {
     "@kava-labs/crypto-rate-utils": "^2.0.2",
+    "@types/node": "^11.12.2",
+    "@types/webassembly-js-api": "0.0.2",
     "bignumber.js": "^7.2.1",
     "bitcoin-ts": "^1.4.0",
     "btp-packet": "^2.2.0",
@@ -54,8 +56,6 @@
   },
   "devDependencies": {
     "@types/get-port": "^4.2.0",
-    "@types/node": "^10.14.4",
-    "@types/webassembly-js-api": "0.0.2",
     "ava": "^1.4.1",
     "codecov": "^3.2.0",
     "get-port": "^4.2.0",
