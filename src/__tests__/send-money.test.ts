@@ -13,7 +13,7 @@ test('money can be sent between two peers', async t => {
       role: 'client',
       server: `btp+ws://:secret@localhost:${port}`,
       ethereumPrivateKey: process.env.PRIVATE_KEY_A!,
-      ethereumProvider: 'kovan'
+      ethereumProvider: process.env.ETHEREUM_PROVIDER as any
     },
     {
       log: createLogger('ilp-plugin-ethereum:client')
@@ -28,7 +28,7 @@ test('money can be sent between two peers', async t => {
         secret: 'secret'
       },
       ethereumPrivateKey: process.env.PRIVATE_KEY_B!,
-      ethereumProvider: 'kovan'
+      ethereumProvider: process.env.ETHEREUM_PROVIDER as any
     },
     {
       log: createLogger('ilp-plugin-ethereum:server')

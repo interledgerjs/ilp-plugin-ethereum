@@ -15,7 +15,7 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
     {
       role: 'client',
       ethereumPrivateKey: process.env.PRIVATE_KEY_A!,
-      ethereumProvider: 'kovan',
+      ethereumProvider: process.env.ETHEREUM_PROVIDER as any,
       server: `btp+ws://userA:secretA@localhost:${port}`
     },
     {
@@ -29,7 +29,7 @@ test(`channel watcher claims settling channel if it's profitable`, async t => {
       {
         role: 'server',
         ethereumPrivateKey: process.env.PRIVATE_KEY_B!,
-        ethereumProvider: 'kovan',
+        ethereumProvider: process.env.ETHEREUM_PROVIDER as any,
         channelWatcherInterval: 5000, // Every 5 sec
         debugHostIldcpInfo: {
           assetCode: 'ETH',
