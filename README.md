@@ -18,6 +18,8 @@ Settle Interledger payments with ether and (soon!) ERC-20 tokens. Powered by [Ma
 npm install ilp-plugin-ethereum
 ```
 
+Node.js 10+ is recommended.
+
 ## API
 
 Here are the available options to pass to the plugin. Additional configuration options are also inherited from [ilp-plugin-btp](https://github.com/interledgerjs/ilp-plugin-btp) if the plugin is a client, and [ilp-plugin-mini-accounts](https://github.com/interledgerjs/ilp-plugin-mini-accounts) if the plugin is a server.
