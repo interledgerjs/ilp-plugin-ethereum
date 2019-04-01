@@ -246,11 +246,16 @@ export const isValidClaimSignature = (secp256k1: Secp256k1) => (
   const v = claim.signature.slice(-2)
   const recoveryId = v === '1c' ? 1 : 0
 
-  const publicKey = secp256k1.recoverPublicKeyUncompressed(
-    signatureBuffer,
-    recoveryId,
-    createPaymentDigest(claim.contractAddress, claim.channelId, claim.value)
-  )
+  let publicKey: Uint8Array
+  try {
+    publicKey = secp256k1.recoverPublicKeyUncompressed(
+      signatureBuffer,
+      recoveryId,
+      createPaymentDigest(claim.contractAddress, claim.channelId, claim.value)
+    )
+  } catch (err) {
+    return false
+  }
 
   const senderAddress = ethers.utils.computeAddress(publicKey)
   return senderAddress.toLowerCase() === channel.sender.toLowerCase()

@@ -77,6 +77,10 @@ export class EthereumClientPlugin extends BtpPlugin implements PluginInstance {
     return Buffer.alloc(0)
   }
 
+  sendMoney(amount: string) {
+    return this.getAccount().sendMoney(amount)
+  }
+
   _disconnect(): Promise<void> {
     return this.getAccount().disconnect()
   }

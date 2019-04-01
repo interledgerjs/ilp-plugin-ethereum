@@ -360,28 +360,22 @@ export default class EthereumAccount {
 
     // Ensure that we've successfully fetched the channel details before sending a claim
     // TODO Handle errors from refresh channel
-    const newChannel = this.refreshChannel(
+    const newChannel = await this.refreshChannel(
       channelId,
       (channel): channel is PaymentChannel => !!channel
-    )().then(
-      async channel =>
-        channel &&
-        // Send a zero amount claim to the peer so they'll link the channel
-        this.sendClaim(this.signClaim(new BigNumber(0), channel))
-          .catch(err =>
-            this.master._log.error(
-              'Error sending proof-of-channel to peer: ',
-              err
-            )
-          )
-          .then(() => channel)
+    )()
+
+    // Send a zero amount claim to the peer so they'll link the channel
+    const signedChannel = this.signClaim(new BigNumber(0), newChannel)
+    this.sendClaim(signedChannel).catch(err =>
+      this.master._log.error('Error sending proof-of-channel to peer: ', err)
     )
 
     this.master._log.debug(
       `Successfully opened channel ${channelId} for ${format(wei(value))}`
     )
 
-    return newChannel
+    return signedChannel
   }
 
   /**
@@ -421,11 +415,26 @@ export default class EthereumAccount {
         )
 
         await this.master._queueTransaction(sendTransaction)
+
         // TODO If refreshChannel throws, is the behavior correct?
         const updatedChannel = await this.refreshChannel(
           channel,
           isDepositSuccessful
         )()
+
+        // Send an invalid claim with a large value to trigger the peer to refresh the channel
+        this.master._log.debug(
+          'Sending invalid claim to peer to trigger them to update channel value'
+        )
+        this.sendClaim({
+          ...updatedChannel,
+          spent: new BigNumber(updatedChannel.value),
+          signature: '0x'.padEnd(132, '0')
+        }).catch(err =>
+          this.master._log.debug(
+            `Peer responded to invalid claim: ${err.message}`
+          )
+        )
 
         this.master._log.debug(
           `Successfully deposited ${format(
@@ -870,7 +879,20 @@ export default class EthereumAccount {
     )
     if (!isSigned) {
       this.master._log.debug('Invalid claim: signature is invalid')
-      return cachedChannel
+
+      /**
+       * The peer may have sent us an invalid claim to trigger a refresh of the channel state,
+       * so return a state with the (potentially) updated channel value
+       *
+       * (this is safe since we've already confirmed that the channelId used to fetch the
+       * updated channel state was the same as the previously linked channel)
+       */
+      return !cachedChannel
+        ? cachedChannel
+        : {
+            ...cachedChannel,
+            value: updatedChannel.value
+          }
     }
 
     const sufficientChannelValue = updatedChannel.value.isGreaterThanOrEqualTo(

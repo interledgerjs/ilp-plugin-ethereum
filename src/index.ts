@@ -2,7 +2,6 @@ import { convert, eth, gwei, wei } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
 import { instantiateSecp256k1, Secp256k1 } from 'bitcoin-ts'
 import { registerProtocolNames } from 'btp-packet'
-import debug from 'debug'
 import { ethers } from 'ethers'
 import { EventEmitter2 } from 'eventemitter2'
 import createLogger from 'ilp-logger'
@@ -345,15 +344,7 @@ export default class EthereumPlugin extends EventEmitter2
   }
 
   async sendMoney(amount: string) {
-    const peerAccount = this._accounts.get('peer')
-    if (peerAccount) {
-      // If the plugin is acting as a client, enable sendMoney (required for prefunding)
-      await peerAccount.sendMoney(amount)
-    } else {
-      this._log.error(
-        'sendMoney is not supported: use plugin balance configuration instead of connector balance for settlement'
-      )
-    }
+    return this._plugin.sendMoney(amount)
   }
 
   registerDataHandler(dataHandler: DataHandler) {
