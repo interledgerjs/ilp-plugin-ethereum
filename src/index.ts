@@ -1,14 +1,11 @@
 import { convert, eth, gwei, wei } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
+import { instantiateSecp256k1, Secp256k1 } from 'bitcoin-ts'
 import { registerProtocolNames } from 'btp-packet'
-import debug from 'debug'
-import { isValidPrivate, toBuffer } from 'ethereumjs-util'
+import { ethers } from 'ethers'
 import { EventEmitter2 } from 'eventemitter2'
 import createLogger from 'ilp-logger'
 import { BtpPacket, IlpPluginBtpConstructorOptions } from 'ilp-plugin-btp'
-import Web3 from 'web3'
-import Contract from 'web3/eth/contract'
-import { Provider as EthereumProvider } from 'web3/providers'
 import EthereumAccount, { SerializedAccountData } from './account'
 import { EthereumClientPlugin } from './plugins/client'
 import { EthereumServerPlugin, MiniAccountsOpts } from './plugins/server'
@@ -20,13 +17,13 @@ import {
   PluginServices
 } from './types/plugin'
 import {
+  ClaimablePaymentChannel,
+  deserializePaymentChannel,
   getContract,
-  updateChannel,
+  PaymentChannel,
   remainingInChannel,
   spentFromChannel,
-  PaymentChannel,
-  ClaimablePaymentChannel,
-  deserializePaymentChannel
+  updateChannel
 } from './utils/contract'
 import ReducerQueue from './utils/queue'
 import { MemoryStore, StoreWrapper } from './utils/store'
@@ -69,8 +66,17 @@ export interface EthereumPluginOpts
    */
   ethereumPrivateKey: string
 
-  /** Connection to an Ethereum node to query the network */
-  ethereumProvider?: string | EthereumProvider
+  /**
+   * Ethers Ethereum provider to query the network,
+   * or the name of an Ethereum chain to create an
+   * Infura and Etherscan fallback provider
+   */
+  ethereumProvider?:
+    | 'homestead'
+    | 'kovan'
+    | 'ropsten'
+    | 'rinkeby'
+    | ethers.providers.Provider
 
   /** Default amount to fund when opening a new channel or depositing to a depleted channel (gwei) */
   outgoingChannelAmount?: BigNumber.Value
@@ -96,7 +102,7 @@ export interface EthereumPluginOpts
   channelWatcherInterval?: BigNumber.Value
 
   /** Query the currenct gas price, if it was supplied */
-  getGasPrice?: () => Promise<number>
+  getGasPrice?: () => Promise<BigNumber.Value>
 }
 
 export default class EthereumPlugin extends EventEmitter2
@@ -104,10 +110,8 @@ export default class EthereumPlugin extends EventEmitter2
   static readonly version = 2
   readonly _plugin: EthereumClientPlugin | EthereumServerPlugin
   readonly _accounts = new Map<string, EthereumAccount>() // accountName -> account
-  readonly _ethereumAddress: string
-  readonly _privateKey: string
-  readonly _web3: Web3
-  readonly _getGasPrice: () => Promise<number> // wei
+  readonly _wallet: ethers.Wallet
+  readonly _getGasPrice: () => Promise<BigNumber> // wei
   readonly _outgoingChannelAmount: BigNumber // wei
   readonly _minIncomingChannelAmount: BigNumber // wei
   readonly _outgoingDisputePeriod: BigNumber // # of blocks
@@ -118,7 +122,8 @@ export default class EthereumPlugin extends EventEmitter2
   readonly _store: StoreWrapper
   readonly _log: Logger
   _txPipeline: Promise<void> = Promise.resolve()
-  _contract: Promise<Contract>
+  _secp256k1?: Secp256k1
+  _contract: Promise<ethers.Contract>
   _dataHandler: DataHandler = defaultDataHandler
   _moneyHandler: MoneyHandler = defaultMoneyHandler
 
@@ -126,7 +131,7 @@ export default class EthereumPlugin extends EventEmitter2
     {
       role = 'client',
       ethereumPrivateKey,
-      ethereumProvider = 'wss://mainnet.infura.io/ws',
+      ethereumProvider = 'homestead',
       getGasPrice,
       outgoingChannelAmount = convert(eth('0.05'), gwei()),
       minIncomingChannelAmount = Infinity,
@@ -143,37 +148,28 @@ export default class EthereumPlugin extends EventEmitter2
   ) {
     super()
 
-    // Web3 errors are unclear if no key was provided
-    // tslint:disable-next-line:strict-type-predicates
-    if (typeof ethereumPrivateKey !== 'string') {
-      throw new Error('Ethereum private key is required')
-    }
+    const provider =
+      typeof ethereumProvider === 'object'
+        ? ethereumProvider
+        : ethers.getDefaultProvider(ethereumProvider)
 
-    // Web3 requires a 0x in front, so prepend it if it's missing
-    if (ethereumPrivateKey.indexOf('0x') !== 0) {
-      ethereumPrivateKey = '0x' + ethereumPrivateKey
-    }
-
-    if (!isValidPrivate(toBuffer(ethereumPrivateKey))) {
-      throw new Error('Invalid Ethereum private key')
-    }
+    this._wallet = new ethers.Wallet(ethereumPrivateKey, provider)
 
     this._store = new StoreWrapper(store)
-
     this._log = log || createLogger(`ilp-plugin-ethereum-${role}`)
-    this._log.trace =
-      this._log.trace || debug(`ilp-plugin-ethereum-${role}:trace`)
 
-    this._web3 = new Web3(ethereumProvider)
-    this._ethereumAddress = this._web3.eth.accounts.wallet.add(
-      ethereumPrivateKey
-    ).address
-    this._privateKey = ethereumPrivateKey.slice(2)
-    this._getGasPrice = getGasPrice || (() => this._web3.eth.getGasPrice())
+    this._getGasPrice = async () =>
+      new BigNumber(
+        getGasPrice
+          ? await getGasPrice()
+          : await this._wallet.provider
+              .getGasPrice()
+              .then(gasPrice => gasPrice.toString())
+      )
 
     // Cache the ABI/address of the contract corresponding to the chain we're connected to
     // If this promise rejects, connect() will also reject since loading accounts await this
-    this._contract = getContract(this._web3).catch(err => {
+    this._contract = getContract(this._wallet).catch(err => {
       this._log.error('Failed to load contract ABI and address:', err)
       throw err
     })
@@ -305,13 +301,15 @@ export default class EthereumPlugin extends EventEmitter2
   }
 
   async connect() {
+    this._secp256k1 = await instantiateSecp256k1()
+
     // Load all accounts from the store
     await this._store.loadObject('accounts')
     const accounts =
       (this._store.getObject('accounts') as string[] | void) || []
 
     for (const accountName of accounts) {
-      this._log.trace(`Loading account ${accountName} from store`)
+      this._log.debug(`Loading account ${accountName} from store`)
       await this._loadAccount(accountName)
 
       // Throttle loading accounts to ~100 per second
@@ -346,15 +344,7 @@ export default class EthereumPlugin extends EventEmitter2
   }
 
   async sendMoney(amount: string) {
-    const peerAccount = this._accounts.get('peer')
-    if (peerAccount) {
-      // If the plugin is acting as a client, enable sendMoney (required for prefunding)
-      await peerAccount.sendMoney(amount)
-    } else {
-      this._log.error(
-        'sendMoney is not supported: use plugin balance configuration instead of connector balance for settlement'
-      )
-    }
+    return this._plugin.sendMoney(amount)
   }
 
   registerDataHandler(dataHandler: DataHandler) {

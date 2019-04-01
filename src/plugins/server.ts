@@ -69,6 +69,12 @@ export class EthereumServerPlugin extends MiniAccountsPlugin
     )
   }
 
+  async sendMoney() {
+    throw new Error(
+      'sendMoney is not supported: use plugin balance configuration'
+    )
+  }
+
   async _close(from: string): Promise<void> {
     return this.getAccount(from).disconnect()
   }

@@ -1,10 +1,10 @@
 # Interledger Ethereum Plugin
 
-[![NPM Package](https://img.shields.io/npm/v/ilp-plugin-ethereum/next.svg?style=flat)](https://npmjs.org/package/ilp-plugin-ethereum)
-[![CircleCI](https://img.shields.io/circleci/project/github/interledgerjs/ilp-plugin-ethereum.svg)](https://circleci.com/gh/interledgerjs/ilp-plugin-ethereum)
-[![Codecov](https://img.shields.io/codecov/c/github/interledgerjs/ilp-plugin-ethereum.svg)](https://codecov.io/gh/interledgerjs/ilp-plugin-ethereum)
-[![JavaScript Style Guide](https://img.shields.io/badge/code_style-standard-brightgreen.svg)](https://standardjs.com)
-[![Apache 2.0 License](https://img.shields.io/github/license/interledgerjs/ilp-plugin-ethereum.svg)](https://github.com/interledgerjs/ilp-plugin-ethereum/blob/master/LICENSE)
+[![NPM Package](https://img.shields.io/npm/v/ilp-plugin-ethereum.svg?style=flat-square&logo=npm)](https://npmjs.org/package/ilp-plugin-ethereum)
+[![CircleCI](https://img.shields.io/circleci/project/github/interledgerjs/ilp-plugin-ethereum/master.svg?style=flat-square&logo=circleci)](https://circleci.com/gh/interledgerjs/ilp-plugin-ethereum/master)
+[![Codecov](https://img.shields.io/codecov/c/github/interledgerjs/ilp-plugin-ethereum/master.svg?style=flat-square&logo=codecov)](https://codecov.io/gh/interledgerjs/ilp-plugin-ethereum)
+[![Prettier](https://img.shields.io/badge/code_style-prettier-brightgreen.svg?style=flat-square)](https://prettier.io/)
+[![Apache 2.0 License](https://img.shields.io/github/license/interledgerjs/ilp-plugin-ethereum.svg?style=flat-square)](https://github.com/interledgerjs/ilp-plugin-ethereum/blob/master/LICENSE)
 
 🚨 **Expect breaking changes while this plugin is in beta.**
 
@@ -15,8 +15,10 @@ Settle Interledger payments with ether and (soon!) ERC-20 tokens. Powered by [Ma
 ## Install
 
 ```bash
-npm install ilp-plugin-ethereum@next
+npm install ilp-plugin-ethereum
 ```
+
+Node.js 10+ is recommended.
 
 ## API
 
@@ -32,9 +34,14 @@ This plugin uses an asset scale of 9 and units of _gwei_, and **not** 18, or wei
 
 #### `ethereumProvider`
 
-- Type: `string` or [`Web3.Provider`](https://web3js.readthedocs.io/en/1.0/web3.html#providers)
-- Default: `"wss://mainnet.infura.io/ws"`
-- [Web3 1.0 provider](https://web3js.readthedocs.io/en/1.0/web3.html#providers) used to connect to an Ethereum node
+- Type:
+  - `"homestead"` to use Infura & Etherscan on mainnet
+  - `"ropsten"` to use Infura & Etherscan on the Ropsten proof of work testnet
+  - `"kovan"` to use Infura & Etherscan on the Kovan proof of authority testnet (Parity)
+  - `"rinkeby"` to use Infura & Etherscan on the Rinkeby proof of authority testnet (Geth)
+  - [`ethers.providers.Provider`](https://docs.ethers.io/ethers.js/html/api-providers.html) to supply a custom provider
+- Default: `"homestead"`
+- [Ethers provider](https://docs.ethers.io/ethers.js/html/api-providers.html) used to connect to an Ethereum node for a particular chain/testnet
 
 #### `role`
 

@@ -1,14 +1,10 @@
 import BigNumber from 'bignumber.js'
+import { Secp256k1 } from 'bitcoin-ts'
 import { randomBytes } from 'crypto'
+import { Contract, ethers } from 'ethers'
 import { promisify } from 'util'
-import Web3 from 'web3'
-import Contract from 'web3/eth/contract'
-import { TransactionObject } from 'web3/eth/types'
 import UNIDIRECTIONAL_MAINNET from '../abi/Unidirectional-mainnet.json'
 import UNIDIRECTIONAL_TESTNET from '../abi/Unidirectional-testnet.json'
-import { TransactionReceipt } from 'web3/types'
-import { keccak256 } from 'js-sha3'
-import { recover } from 'eth-crypto'
 
 const CONTRACT_METADATA: {
   [index: number]: {
@@ -110,17 +106,19 @@ export const deserializePaymentChannel = <
 export const generateChannelId = async () =>
   '0x' + (await promisify(randomBytes)(32)).toString('hex')
 
-export const getContract = async (web3: Web3) => {
-  const chainId = await web3.eth.net.getId()
+export const getContract = async (wallet: ethers.Wallet) => {
+  const { chainId, name } = await wallet.provider.getNetwork()
+
   const contractMetadata = CONTRACT_METADATA[chainId]
 
   if (!contractMetadata) {
-    throw new Error('Machinomy is not supported on the current chain')
+    throw new Error(`Machinomy is not supported on ${name}`)
   }
 
-  return new web3.eth.Contract(
+  return new ethers.Contract(
+    contractMetadata.unidirectional.address,
     contractMetadata.unidirectional.abi,
-    contractMetadata.unidirectional.address
+    wallet
   )
 }
 
@@ -152,80 +150,75 @@ export const fetchChannel = async (
     settlingUntil,
     settlingPeriod,
     value
-  } = await contract.methods.channels(channelId).call()
+  } = await contract.functions.channels(channelId)
 
-  // Minimic the check done at the contract level (check for empty address 0x00000...)
-  if (new BigNumber(sender).isZero()) {
+  if (sender === ethers.constants.AddressZero) {
     return
   }
 
   // In contract, `settlingUntil` should be positive if settling, 0 if open (contract checks if settlingUntil != 0)
-  const disputedUntil =
-    settlingUntil !== '0' ? new BigNumber(settlingUntil) : undefined
+  const disputedUntil = settlingUntil.gt(0)
+    ? new BigNumber(settlingUntil.toString())
+    : undefined
 
   return {
     lastUpdated: Date.now(),
-    contractAddress: contract.options.address,
+    contractAddress: contract.address,
     channelId,
     receiver,
     sender,
     disputedUntil,
-    disputePeriod: new BigNumber(settlingPeriod),
-    value: new BigNumber(value),
+    disputePeriod: new BigNumber(settlingPeriod.toString()),
+    value: new BigNumber(value.toString()),
     spent: new BigNumber(0)
   }
 }
 
 export const prepareTransaction = async ({
-  txObj,
-  from,
+  methodName,
+  params,
+  contract,
   gasPrice,
   value = 0
 }: {
-  txObj: TransactionObject<any>
-  from: string
-  gasPrice: number
+  methodName: string
+  params: any[]
+  contract: ethers.Contract
+  gasPrice: BigNumber.Value
   value?: BigNumber.Value
 }): Promise<{
   txFee: BigNumber
   sendTransaction: () => Promise<void>
 }> => {
-  const tx = {
-    from,
-    data: txObj.encodeABI(),
-    value: '0x' + new BigNumber(value).toString(16)
+  const overrides = {
+    value: ethers.utils.bigNumberify(value.toString()),
+    gasPrice: ethers.utils.bigNumberify(gasPrice.toString())
   }
-  const gas = await txObj.estimateGas(tx)
-  const txFee = new BigNumber(gas).times(gasPrice)
+
+  const gasLimit = await contract.estimate[methodName](...params, overrides)
+
+  const txFee = new BigNumber(gasPrice).times(gasLimit.toString())
 
   return {
     txFee,
-    sendTransaction: () => {
-      const emitter = txObj.send({
-        ...tx,
-        gasPrice,
-        gas
+    sendTransaction: async () => {
+      const tx: ethers.ContractTransaction = await contract.functions[
+        methodName
+      ](...params, {
+        ...overrides,
+        gasLimit
       })
 
-      return new Promise<void>((resolve, reject) => {
-        emitter.on(
-          'confirmation',
-          (confNumber: number, receipt: TransactionReceipt) => {
-            if (!receipt.status) {
-              reject(new Error('Ethereum transaction reverted by the EVM'))
-            } else if (confNumber >= 1) {
-              resolve()
-            }
-          }
-        )
+      // Wait 1 confirmation
+      const receipt = await tx.wait(1)
 
-        emitter.on('error', (err: Error) => {
-          reject(err)
-        })
-      }).finally(() => {
-        // @ts-ignore
-        emitter.removeAllListeners()
-      })
+      /**
+       * Per EIP 658, a receipt of 1 indicates the tx was successful:
+       * https://github.com/Arachnid/EIPs/blob/d1ae915d079293480bd6abb0187976c230d57903/EIPS/eip-658.md
+       */
+      if (receipt.status !== 1) {
+        throw new Error('Ethereum transaction reverted by the EVM')
+      }
     }
   }
 }
@@ -243,15 +236,28 @@ export const remainingInChannel = (channel?: PaymentChannel): BigNumber =>
 export const isDisputed = (channel: PaymentChannel): boolean =>
   !!channel.disputedUntil
 
-export const isValidClaimSignature = (
+export const isValidClaimSignature = (secp256k1: Secp256k1) => (
   claim: SerializedClaim,
   channel: PaymentChannel
 ): boolean => {
-  const senderAddress = recover(
-    claim.signature,
-    createPaymentDigest(claim.contractAddress, claim.channelId, claim.value)
-  )
+  const signature = claim.signature.slice(0, -2) // Remove recovery param from end
+  const signatureBuffer = hexToBuffer(signature)
 
+  const v = claim.signature.slice(-2)
+  const recoveryId = v === '1c' ? 1 : 0
+
+  let publicKey: Uint8Array
+  try {
+    publicKey = secp256k1.recoverPublicKeyUncompressed(
+      signatureBuffer,
+      recoveryId,
+      createPaymentDigest(claim.contractAddress, claim.channelId, claim.value)
+    )
+  } catch (err) {
+    return false
+  }
+
+  const senderAddress = ethers.utils.computeAddress(publicKey)
   return senderAddress.toLowerCase() === channel.sender.toLowerCase()
 }
 
@@ -259,21 +265,20 @@ export const createPaymentDigest = (
   contractAddress: string,
   channelId: string,
   value: string
-) => {
-  const paymentDigest = Web3.utils.soliditySha3(
-    contractAddress,
-    channelId,
-    value
+): Buffer => {
+  const paymentDigest = ethers.utils.solidityKeccak256(
+    ['address', 'bytes32', 'uint256'],
+    [contractAddress, channelId, value]
   )
+  const paymentDigestBuffer = hexToBuffer(paymentDigest)
 
-  const paymentDigestBuffer = Buffer.from(Web3.utils.hexToBytes(paymentDigest))
-
-  const prefixedPaymentDigest = Buffer.concat([
-    Buffer.from(SIGNED_MESSAGE_PREFIX),
-    paymentDigestBuffer
-  ])
-
-  return keccak256(prefixedPaymentDigest)
+  // Prefix with `\x19Ethereum Signed Message\n`, encode packed, and hash using keccak256 again
+  const prefixedPaymentDigest = ethers.utils.hashMessage(paymentDigestBuffer)
+  return hexToBuffer(prefixedPaymentDigest)
 }
 
-export const SIGNED_MESSAGE_PREFIX = '\x19Ethereum Signed Message:\n32'
+export const hexToBuffer = (hexString: string) =>
+  Buffer.from(stripHexPrefix(hexString), 'hex')
+
+const stripHexPrefix = (hexString: string) =>
+  hexString.startsWith('0x') ? hexString.slice(2) : hexString
