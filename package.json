@@ -4,9 +4,6 @@
   "description": "Settle Interledger payments with ether and ERC-20 tokens",
   "main": "index.js",
   "types": "build/index.d.ts",
-  "publishConfig": {
-    "tag": "next"
-  },
   "files": [
     "build",
     "!build/__tests__"

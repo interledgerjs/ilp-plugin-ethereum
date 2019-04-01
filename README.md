@@ -1,10 +1,10 @@
 # Interledger Ethereum Plugin
 
-[![NPM Package](https://img.shields.io/npm/v/ilp-plugin-ethereum/next.svg?style=flat)](https://npmjs.org/package/ilp-plugin-ethereum)
-[![CircleCI](https://img.shields.io/circleci/project/github/interledgerjs/ilp-plugin-ethereum.svg)](https://circleci.com/gh/interledgerjs/ilp-plugin-ethereum)
-[![Codecov](https://img.shields.io/codecov/c/github/interledgerjs/ilp-plugin-ethereum.svg)](https://codecov.io/gh/interledgerjs/ilp-plugin-ethereum)
-[![JavaScript Style Guide](https://img.shields.io/badge/code_style-standard-brightgreen.svg)](https://standardjs.com)
-[![Apache 2.0 License](https://img.shields.io/github/license/interledgerjs/ilp-plugin-ethereum.svg)](https://github.com/interledgerjs/ilp-plugin-ethereum/blob/master/LICENSE)
+[![NPM Package](https://img.shields.io/npm/v/ilp-plugin-ethereum.svg?style=flat-square&logo=npm)](https://npmjs.org/package/ilp-plugin-ethereum)
+[![CircleCI](https://img.shields.io/circleci/project/github/interledgerjs/ilp-plugin-ethereum/master.svg?style=flat-square&logo=circleci)](https://circleci.com/gh/interledgerjs/ilp-plugin-ethereum/master)
+[![Codecov](https://img.shields.io/codecov/c/github/interledgerjs/ilp-plugin-ethereum/master.svg?style=flat-square&logo=codecov)](https://codecov.io/gh/interledgerjs/ilp-plugin-ethereum)
+[![Prettier](https://img.shields.io/badge/code_style-prettier-brightgreen.svg?style=flat-square)](https://prettier.io/)
+[![Apache 2.0 License](https://img.shields.io/github/license/interledgerjs/ilp-plugin-ethereum.svg?style=flat-square)](https://github.com/interledgerjs/ilp-plugin-ethereum/blob/master/LICENSE)
 
 🚨 **Expect breaking changes while this plugin is in beta.**
 
@@ -15,7 +15,7 @@ Settle Interledger payments with ether and (soon!) ERC-20 tokens. Powered by [Ma
 ## Install
 
 ```bash
-npm install ilp-plugin-ethereum@next
+npm install ilp-plugin-ethereum
 ```
 
 ## API
