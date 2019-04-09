@@ -109,8 +109,8 @@ export interface AccountData {
 }
 
 enum IncomingTaskPriority {
-  ClaimChannel = 2,
-  ValidateClaim = 1
+  ClaimChannel = 1,
+  ValidateClaim = 0
 }
 
 export default class EthereumAccount {
@@ -662,7 +662,7 @@ export default class EthereumAccount {
 
       // Don't block the queue while fetching channel state, since that slows down claim processing
       this.master._log.debug('Checking if peer has deposited to channel')
-      const refreshChannel = async (attempts = 0): Promise<void> => {
+      const checkForDeposit = async (attempts = 0): Promise<void> => {
         if (attempts > 20) {
           return this.master._log.debug(
             `Failed to confirm incoming deposit after several attempts`
@@ -682,7 +682,8 @@ export default class EthereumAccount {
           cachedChannel.value
         )
         if (!wasDeposit) {
-          return refreshChannel(attempts + 1)
+          await delay(250)
+          return checkForDeposit(attempts + 1)
         }
 
         // Rectify the two forked states
@@ -714,7 +715,7 @@ export default class EthereumAccount {
         })
       }
 
-      await refreshChannel().catch(err => {
+      await checkForDeposit().catch(err => {
         this.master._log.error('Error confirming incoming deposit:', err)
       })
 
@@ -756,12 +757,10 @@ export default class EthereumAccount {
         return []
       }
 
-      await this.account.incoming
-        .add(this.validateClaim(claim), IncomingTaskPriority.ValidateClaim)
-        .catch(err =>
-          // Don't expose internal errors, since it may not have been intentionally thrown
-          this.master._log.error('Failed to validate claim: ', err)
-        )
+      await this.account.incoming.add(this.validateClaim(claim)).catch(err =>
+        // Don't expose internal errors, since it may not have been intentionally thrown
+        this.master._log.error('Failed to validate claim: ', err)
+      )
 
       /**
        * Attempt to fund an outgoing channel, if the incoming claim is accepted,
