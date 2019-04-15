@@ -28,7 +28,7 @@ import {
 import ReducerQueue from './utils/queue'
 import { MemoryStore, StoreWrapper } from './utils/store'
 
-registerProtocolNames(['machinomy', 'requestClose'])
+registerProtocolNames(['machinomy', 'requestClose', 'channelDeposit'])
 
 // Almost never use exponential notation
 BigNumber.config({ EXPONENTIAL_AT: 1e9 })
@@ -105,6 +105,14 @@ export interface EthereumPluginOpts
   getGasPrice?: () => Promise<BigNumber.Value>
 }
 
+const OUTGOING_CHANNEL_AMOUNT_GWEI = convert(eth('0.05'), gwei())
+
+const BLOCKS_PER_DAY = (24 * 60 * 60) / 15 // Assuming 1 block / 15 seconds
+const OUTGOING_DISPUTE_PERIOD_BLOCKS = 6 * BLOCKS_PER_DAY // 6 days
+const MIN_INCOMING_DISPUTE_PERIOD_BLOCKS = 3 * BLOCKS_PER_DAY // 3 days
+
+const CHANNEL_WATCHER_INTERVAL_MS = new BigNumber(60 * 1000)
+
 export default class EthereumPlugin extends EventEmitter2
   implements PluginInstance {
   static readonly version = 2
@@ -133,14 +141,12 @@ export default class EthereumPlugin extends EventEmitter2
       ethereumPrivateKey,
       ethereumProvider = 'homestead',
       getGasPrice,
-      outgoingChannelAmount = convert(eth('0.05'), gwei()),
+      outgoingChannelAmount = OUTGOING_CHANNEL_AMOUNT_GWEI,
       minIncomingChannelAmount = Infinity,
-      outgoingDisputePeriod = (6 * (24 * 60 * 60)) /
-        15 /** ~ 6 days @ 15 sec block time */,
-      minIncomingDisputePeriod = (3 * (24 * 60 * 60)) /
-        15 /** ~ 3 days @ 15 sec block time */,
+      outgoingDisputePeriod = OUTGOING_DISPUTE_PERIOD_BLOCKS,
+      minIncomingDisputePeriod = MIN_INCOMING_DISPUTE_PERIOD_BLOCKS,
       maxPacketAmount = Infinity,
-      channelWatcherInterval = new BigNumber(60 * 1000), // By default, every 60 seconds
+      channelWatcherInterval = CHANNEL_WATCHER_INTERVAL_MS, // By default, every 60 seconds
       // All remaining params are passed to mini-accounts/plugin-btp
       ...opts
     }: EthereumPluginOpts,
