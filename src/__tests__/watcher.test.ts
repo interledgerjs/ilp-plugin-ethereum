@@ -1,6 +1,6 @@
 import getPort from 'get-port'
 import EthereumPlugin from '..'
-import { getContract, prepareTransaction } from '../utils/contract'
+import { prepareTransaction } from '../utils/channel'
 import { MemoryStore } from '../utils/store'
 import test from 'ava'
 import { convert, eth, gwei, wei } from '@kava-labs/crypto-rate-utils'

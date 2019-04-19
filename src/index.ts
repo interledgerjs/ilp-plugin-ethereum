@@ -24,7 +24,7 @@ import {
   remainingInChannel,
   spentFromChannel,
   updateChannel
-} from './utils/contract'
+} from './utils/channel'
 import ReducerQueue from './utils/queue'
 import { MemoryStore, StoreWrapper } from './utils/store'
 
