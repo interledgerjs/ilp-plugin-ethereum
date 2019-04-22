@@ -54,7 +54,7 @@ This plugin uses an asset scale of 9 and units of _gwei_, and **not** 18, or wei
 
 Clients do not automatically open channels, nor settle automatically. Channels must be funded or closed through the internal API of the plugin. Sending payment channel claims can be triggered by invoking `sendMoney` on the plugin, and the money handler is called upon receipt of incoming payment channel claims (set using `registerMoneyHandler`).
 
-Servers _do_ automatically open channels. If a client has opened a channel with a value above the configurable `minIncomingChannelAmount`, the server will automatically open a channel back to the client with a value of `outgoingChannelAmount`. When the channel is half empty, the server will also automatically top up the value of the channel to the `outgoingChannelAmount`.
+Servers _do_ automatically open channels. If a client has opened a channel with a value above the configurable `minIncomingChannelAmount`, the server will automatically open a channel back to the client with a value of `outgoingChannelAmount`. When the channel is half empty, the server will also automatically top up the value of the channel by the `outgoingChannelAmount`.
 
 The balance configuration has been simplified for servers. Clients must prefund before sending any packets through a server, and if a client fulfills packets sent to them through a server, the server will automatically settle such that they owe 0 to the client. This configuration was chosen as a default due to it's security and protection against deadlocks.
 

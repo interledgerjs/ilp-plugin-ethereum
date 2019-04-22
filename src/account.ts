@@ -43,7 +43,7 @@ import {
   spentFromChannel,
   updateChannel,
   hexToBuffer
-} from './utils/contract'
+} from './utils/channel'
 import ReducerQueue from './utils/queue'
 
 // Almost never use exponential notation
@@ -291,7 +291,11 @@ export default class EthereumAccount {
     )
   }
 
-  /** Automatically fund a new outgoing channel,  */
+  /**
+   * Automatically fund a new outgoing channel or topup an existing channel
+   * - When over 50% of the capacity has been spent/sent to the receiver,
+   *   add the outgoing channel amount to the channel
+   */
   private async autoFundOutgoingChannel() {
     await this.account.outgoing.add(async cachedChannel => {
       const requiresTopUp =
@@ -310,9 +314,7 @@ export default class EthereumAccount {
         return cachedChannel
           ? this.depositToChannel(
               cachedChannel,
-              this.master._outgoingChannelAmount.minus(
-                remainingInChannel(cachedChannel)
-              )
+              this.master._outgoingChannelAmount
             )
           : this.openChannel(this.master._outgoingChannelAmount)
       }
@@ -396,6 +398,13 @@ export default class EthereumAccount {
     // To simultaneously send payment channel claims, create a "side queue" only for the duration of the deposit
     this.depositQueue = new ReducerQueue<PaymentChannel | undefined>(channel)
 
+    // In case there were pending tasks to send claims in the main queue, try to send a claim
+    this.depositQueue
+      .add(this.createClaim.bind(this))
+      .catch(err =>
+        this.master._log.error('Error queuing task to create new claim:', err)
+      )
+
     const totalNewValue = channel.value.plus(value)
     const isDepositSuccessful = (
       updatedChannel: PaymentChannel | undefined
@@ -460,13 +469,12 @@ export default class EthereumAccount {
         delete this.depositQueue // Don't await the promise so no new tasks are added to the queue
 
         // Merge the updated channel state with any claims sent in the side queue
-        // TODO Rename this
-        const alternativeState = await bestClaim
-        return alternativeState
+        const forkedState = await bestClaim
+        return forkedState
           ? {
               ...updatedChannel,
-              signature: alternativeState.signature,
-              spent: alternativeState.spent
+              signature: forkedState.signature,
+              spent: forkedState.spent
             }
           : updatedChannel
       })
@@ -490,92 +498,93 @@ export default class EthereumAccount {
    * If no amount is specified (e.g. role=server), settle such that 0 is owed to the peer.
    */
   async sendMoney(amount?: string) {
-    const sendClaim = async (
-      cachedChannel: PaymentChannel | undefined
-    ): Promise<PaymentChannel | undefined> => {
-      this.autoFundOutgoingChannel().catch(err =>
-        this.master._log.error(
-          'Error attempting to auto fund outgoing channel: ',
-          err
-        )
-      )
-
-      const amountToSend =
-        amount || BigNumber.max(0, this.account.payableBalance)
-
-      this.account.payoutAmount = this.account.payoutAmount.plus(amountToSend)
-
-      const settlementBudget = convert(gwei(this.account.payoutAmount), wei())
-      if (settlementBudget.lte(0)) {
-        return cachedChannel
-      }
-
-      if (!cachedChannel) {
-        this.master._log.debug(`Cannot send claim: no channel is open`)
-        return cachedChannel
-      }
-
-      // Used to ensure the claim increment is always > 0
-      if (!remainingInChannel(cachedChannel).gt(0)) {
-        this.master._log.debug(
-          `Cannot send claim to: no remaining funds in outgoing channel`
-        )
-        return cachedChannel
-      }
-
-      // Ensures that the increment is greater than the previous claim
-      // Since budget and remaining in channel must be positive, claim increment should always be positive
-      const claimIncrement = BigNumber.min(
-        remainingInChannel(cachedChannel),
-        settlementBudget
-      )
-
-      this.master._log.info(
-        `Settlement attempt triggered with ${this.account.accountName}`
-      )
-
-      // Total value of new claim: value of old best claim + increment of new claim
-      const value = spentFromChannel(cachedChannel).plus(claimIncrement)
-
-      const updatedChannel = this.signClaim(value, cachedChannel)
-
-      this.master._log.debug(
-        `Sending claim for total of ${format(
-          wei(value)
-        )}, incremented by ${format(wei(claimIncrement))}`
-      )
-
-      // Send paychan claim to client, don't await a response
-      this.sendClaim(updatedChannel).catch(err =>
-        // If they reject the claim, it's not particularly actionable
-        this.master._log.debug(
-          `Error while sending claim to peer: ${err.message}`
-        )
-      )
-
-      const claimIncrementGwei = convert(
-        wei(claimIncrement),
-        gwei()
-      ).decimalPlaces(0, BigNumber.ROUND_DOWN)
-
-      this.account.payableBalance = this.account.payableBalance.minus(
-        claimIncrementGwei
-      )
-
-      this.account.payoutAmount = BigNumber.min(
-        0,
-        this.account.payoutAmount.minus(claimIncrementGwei)
-      )
-
-      return updatedChannel
-    }
+    const amountToSend = amount || BigNumber.max(0, this.account.payableBalance)
+    this.account.payoutAmount = this.account.payoutAmount.plus(amountToSend)
 
     this.depositQueue
-      ? await this.depositQueue.add(sendClaim)
-      : await this.account.outgoing.add(sendClaim)
+      ? await this.depositQueue.add(this.createClaim.bind(this))
+      : await this.account.outgoing.add(this.createClaim.bind(this))
   }
 
-  signClaim(value: BigNumber, cachedChannel: PaymentChannel): PaymentChannel {
+  async createClaim(
+    cachedChannel: PaymentChannel | undefined
+  ): Promise<PaymentChannel | undefined> {
+    this.autoFundOutgoingChannel().catch(err =>
+      this.master._log.error(
+        'Error attempting to auto fund outgoing channel: ',
+        err
+      )
+    )
+
+    const settlementBudget = convert(gwei(this.account.payoutAmount), wei())
+    if (settlementBudget.lte(0)) {
+      return cachedChannel
+    }
+
+    if (!cachedChannel) {
+      this.master._log.debug(`Cannot send claim: no channel is open`)
+      return cachedChannel
+    }
+
+    // Used to ensure the claim increment is always > 0
+    if (!remainingInChannel(cachedChannel).gt(0)) {
+      this.master._log.debug(
+        `Cannot send claim to: no remaining funds in outgoing channel`
+      )
+      return cachedChannel
+    }
+
+    // Ensures that the increment is greater than the previous claim
+    // Since budget and remaining in channel must be positive, claim increment should always be positive
+    const claimIncrement = BigNumber.min(
+      remainingInChannel(cachedChannel),
+      settlementBudget
+    )
+
+    this.master._log.info(
+      `Settlement attempt triggered with ${this.account.accountName}`
+    )
+
+    // Total value of new claim: value of old best claim + increment of new claim
+    const value = spentFromChannel(cachedChannel).plus(claimIncrement)
+
+    const updatedChannel = this.signClaim(value, cachedChannel)
+
+    this.master._log.debug(
+      `Sending claim for total of ${format(
+        wei(value)
+      )}, incremented by ${format(wei(claimIncrement))}`
+    )
+
+    // Send paychan claim to client, don't await a response
+    this.sendClaim(updatedChannel).catch(err =>
+      // If they reject the claim, it's not particularly actionable
+      this.master._log.debug(
+        `Error while sending claim to peer: ${err.message}`
+      )
+    )
+
+    const claimIncrementGwei = convert(
+      wei(claimIncrement),
+      gwei()
+    ).decimalPlaces(0, BigNumber.ROUND_DOWN)
+
+    this.account.payableBalance = this.account.payableBalance.minus(
+      claimIncrementGwei
+    )
+
+    this.account.payoutAmount = BigNumber.min(
+      0,
+      this.account.payoutAmount.minus(claimIncrementGwei)
+    )
+
+    return updatedChannel
+  }
+
+  signClaim(
+    value: BigNumber,
+    cachedChannel: PaymentChannel
+  ): ClaimablePaymentChannel {
     const secp256k1 = this.master._secp256k1!
 
     const {
@@ -1217,44 +1226,45 @@ export default class EthereumAccount {
         return
       }
 
-      // TODO The plugin-btp default `responseTimeout` is 35 seconds -- so this might fail/timeout if the tx takes longer to mine!
-      return this.sendMessage({
-        requestId: await generateBtpRequestId(),
-        type: TYPE_MESSAGE,
-        data: {
-          protocolData: [
-            {
-              protocolName: 'requestClose',
-              contentType: MIME_TEXT_PLAIN_UTF8,
-              data: Buffer.alloc(0)
-            }
-          ]
-        }
-      })
-        .catch(err => {
-          this.master._log.debug(
-            `Error while requesting peer to claim channel: ${err.message}`
-          )
-          return cachedChannel
+      try {
+        await this.sendMessage({
+          requestId: await generateBtpRequestId(),
+          type: TYPE_MESSAGE,
+          data: {
+            protocolData: [
+              {
+                protocolName: 'requestClose',
+                contentType: MIME_TEXT_PLAIN_UTF8,
+                data: Buffer.alloc(0)
+              }
+            ]
+          }
         })
-        .then(() => {
-          // Ensure that the channel was successfully closed
-          // TODO Handle errors?
-          const updatedChannel = this.refreshChannel(
-            cachedChannel,
-            (channel): channel is undefined => !channel
-          )()
 
-          this.master._log.debug(
-            `Peer successfully closed our outgoing channel ${
-              cachedChannel.channelId
-            }, returning at least ${format(
-              wei(remainingInChannel(cachedChannel))
-            )} of collateral`
-          )
+        // Ensure that the channel was successfully closed
+        // TODO Handle errors?
+        const updatedChannel = await this.refreshChannel(
+          cachedChannel,
+          (channel): channel is undefined => !channel
+        )()
 
-          return updatedChannel
-        })
+        this.master._log.debug(
+          `Peer successfully closed our outgoing channel ${
+            cachedChannel.channelId
+          }, returning at least ${format(
+            wei(remainingInChannel(cachedChannel))
+          )} of collateral`
+        )
+
+        return updatedChannel
+      } catch (err) {
+        this.master._log.debug(
+          'Error while requesting peer to claim channel:',
+          err
+        )
+
+        return cachedChannel
+      }
     })
   }
 
