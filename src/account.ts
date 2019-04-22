@@ -291,7 +291,11 @@ export default class EthereumAccount {
     )
   }
 
-  /** Automatically fund a new outgoing channel */
+  /**
+   * Automatically fund a new outgoing channel or topup an existing channel
+   * - When over 50% of the capacity has been spent/sent to the receiver,
+   *   add the outgoing channel amount to the channel
+   */
   private async autoFundOutgoingChannel() {
     await this.account.outgoing.add(async cachedChannel => {
       const requiresTopUp =
