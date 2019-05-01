@@ -139,15 +139,19 @@ export const generateChannelId = async () =>
 
 /** TODO Should you be able to specify custom ABIs, addresses or contract instances? */
 export const getContract = async (
-  wallet: ethers.Wallet,
+  signer: ethers.Signer,
   useTokenContract = false,
   contractAddress?: string
 ) => {
-  const { chainId, name } = await wallet.provider.getNetwork()
+  let contractMetadata
 
-  let contractMetadata = useTokenContract
-    ? TOKEN_UNIDIRECTIONAL_METADATA[chainId]
-    : UNIDIRECTIONAL_METADATA[chainId]
+  if (signer.provider) {
+    const { chainId } = await signer.provider.getNetwork()
+
+    contractMetadata = useTokenContract
+      ? TOKEN_UNIDIRECTIONAL_METADATA[chainId]
+      : UNIDIRECTIONAL_METADATA[chainId]
+  }
 
   if (!contractMetadata) {
     if (contractAddress) {
@@ -162,14 +166,16 @@ export const getContract = async (
             address: contractAddress
           }
     } else {
-      throw new Error(`Machinomy is not supported on ${name}`)
+      throw new Error(
+        `Machinomy is not supported on the current Ethereum chain`
+      )
     }
   }
 
   return new ethers.Contract(
     contractMetadata.address,
     contractMetadata.metadata.abi,
-    wallet
+    signer
   )
 }
 
