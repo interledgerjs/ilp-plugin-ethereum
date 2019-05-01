@@ -109,7 +109,7 @@ export interface EthereumPluginOpts
   contractAddress?: string
 
   /** Address of the ERC-20 token contract to use for the token in the payment channel */
-  tokenContract?: string
+  tokenAddress?: string
 }
 
 const OUTGOING_CHANNEL_AMOUNT_GWEI = convert(eth('0.05'), gwei())
@@ -174,7 +174,7 @@ export default class EthereumPlugin extends EventEmitter2
       maxPacketAmount = Infinity,
       channelWatcherInterval = CHANNEL_WATCHER_INTERVAL_MS,
       contractAddress,
-      tokenContract,
+      tokenAddress,
       // All remaining params are passed to mini-accounts/plugin-btp
       ...opts
     }: EthereumPluginOpts,
@@ -209,16 +209,16 @@ export default class EthereumPlugin extends EventEmitter2
     // If this promise rejects, connect() will also reject since loading accounts await this
     this._contract = getContract(
       this._wallet,
-      !!tokenContract,
+      !!tokenAddress,
       contractAddress
     ).catch(err => {
       this._log.error('Failed to load contract ABI and address:', err)
       throw err
     })
 
-    if (tokenContract) {
+    if (tokenAddress) {
       this._tokenContract = new ethers.Contract(
-        tokenContract,
+        tokenAddress,
         ERC20_ARTIFACT.abi,
         this._wallet
       )

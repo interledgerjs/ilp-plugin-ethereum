@@ -64,7 +64,7 @@ test('tokens can be sent between two peers', async t => {
       server: `btp+ws://:secret@localhost:${port}`,
       ethereumWallet: clientWallet,
       contractAddress,
-      tokenContract: tokenContract.address
+      tokenAddress: tokenContract.address
     },
     {
       log: createLogger('ilp-plugin-ethereum:client')
@@ -80,7 +80,7 @@ test('tokens can be sent between two peers', async t => {
       },
       ethereumWallet: serverWallet,
       contractAddress,
-      tokenContract: tokenContract.address
+      tokenAddress: tokenContract.address
     },
     {
       log: createLogger('ilp-plugin-ethereum:server')
