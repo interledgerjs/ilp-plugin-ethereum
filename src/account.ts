@@ -1,10 +1,3 @@
-import {
-  AssetUnit,
-  convert,
-  eth,
-  gwei,
-  wei
-} from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
 import {
   MIME_APPLICATION_JSON,
@@ -42,12 +35,32 @@ import {
   SerializedClaim,
   spentFromChannel,
   updateChannel,
-  hexToBuffer
+  hexToBuffer,
+  hasEvent
 } from './utils/channel'
 import ReducerQueue from './utils/queue'
+import { TransactionReceipt } from 'ethers/providers'
 
 // Almost never use exponential notation
 BigNumber.config({ EXPONENTIAL_AT: 1e9 })
+
+/**
+ * - approve() using OpenZeppelin's MintableToken => 47146
+ * - open() using TokenUnidirectional => 173825
+ * Total: 220971
+ *
+ * - Allow wiggle room in case the ERC-20 implementation needs additional gas
+ */
+const APPROVE_AND_OPEN_GAS_LIMIT = new BigNumber(300000)
+
+/**
+ * - approve() using OpenZeppelin's MintableToken => 47358
+ * - deposit() using TokenUnidirectional => 55192
+ * Total: 102550
+ *
+ * - Allow wiggle room in case the ERC-20 implementation needs additional gas
+ */
+const APPROVE_AND_DEPOSIT_GAS_LIMIT = new BigNumber(150000)
 
 const delay = (timeout: number) => new Promise(r => setTimeout(r, timeout))
 
@@ -56,8 +69,6 @@ const getBtpSubprotocol = (message: BtpPacket, name: string) =>
 
 export const generateBtpRequestId = async () =>
   (await promisify(randomBytes)(4)).readUInt32BE(0)
-
-export const format = (num: AssetUnit) => convert(num, eth()) + ' eth'
 
 export interface SerializedAccountData {
   accountName: string
@@ -340,47 +351,109 @@ export default class EthereumAccount {
     }
 
     const channelId = await generateChannelId()
+    const sender = this.master._wallet.address
+    const receiver = this.account.ethereumAddress
+    const disputePeriod = this.master._outgoingDisputePeriod
+    const tokenContract =
+      this.master._tokenContract && this.master._tokenContract.address
 
-    const { sendTransaction, txFee } = await prepareTransaction({
-      methodName: 'open',
-      params: [
-        channelId,
-        this.account.ethereumAddress,
-        this.master._outgoingDisputePeriod.toString()
-      ],
-      contract: await this.master._contract,
-      gasPrice: await this.master._getGasPrice(),
-      value
+    const contract = await this.master._contract
+    const gasPrice = await this.master._getGasPrice()
+
+    const txObj = !tokenContract
+      ? {
+          methodName: 'open',
+          params: [channelId, receiver, disputePeriod.toString()],
+          contract,
+          gasPrice,
+          value
+        }
+      : {
+          methodName: 'open',
+          params: [
+            channelId,
+            receiver,
+            disputePeriod.toString(),
+            tokenContract,
+            value.toString()
+          ],
+          contract,
+          gasPrice
+        }
+
+    const {
+      sendTransaction,
+      txFee
+    }: {
+      sendTransaction: () => Promise<TransactionReceipt>
+      txFee: BigNumber
+    } = await this.checkIfApproved(value).then(async requiresApproval => {
+      /** For ETH or unlocked ERC-20s, accurately estimate the gas */
+      if (!requiresApproval) {
+        const { txFee, sendTransaction } = await prepareTransaction(txObj)
+        await authorize(txFee)
+        return { txFee, sendTransaction }
+      } else {
+        /**
+         * If approving ERC-20 token transfers is required, overestimate the gas,
+         * using a combined upperbound for both transactions
+         */
+        const gasLimit = APPROVE_AND_OPEN_GAS_LIMIT
+
+        const gasPrice = await this.master._getGasPrice()
+        const txFee = gasLimit.times(gasPrice)
+        await authorize(txFee)
+
+        const remainingGasLimit = await this.secureAllowance(gasLimit)
+
+        return prepareTransaction({
+          ...txObj,
+          gasLimit: remainingGasLimit
+        })
+      }
     })
-
-    await authorize(txFee)
 
     this.master._log.debug(
-      `Opening channel for ${format(wei(value))} and fee of ${format(
-        wei(txFee)
-      )}`
+      `Opening channel for ${this.master._format(
+        value,
+        'base'
+      )} and fee of ${this.master._format(txFee, 'base')}`
     )
 
-    await this.master._queueTransaction(sendTransaction).catch(err => {
-      this.master._log.error(`Failed to open channel:`, err)
-      throw err
+    const receipt = await this.master
+      ._queueTransaction(sendTransaction)
+      .catch(err => {
+        this.master._log.error(`Failed to open channel:`, err)
+        throw err
+      })
+
+    if (!hasEvent(receipt, 'DidOpen')) {
+      throw new Error('Failed to open new channel')
+    }
+
+    // Construct the known initial channel state
+    const signedChannel = this.signClaim({
+      lastUpdated: Date.now(),
+      contractAddress: contract.address,
+      channelId,
+      receiver,
+      sender,
+      disputePeriod,
+      value,
+      spent: new BigNumber(0),
+      tokenContract
     })
 
-    // Ensure that we've successfully fetched the channel details before sending a claim
-    // TODO Handle errors from refresh channel
-    const newChannel = await this.refreshChannel(
-      channelId,
-      (channel): channel is PaymentChannel => !!channel
-    )()
-
     // Send a zero amount claim to the peer so they'll link the channel
-    const signedChannel = this.signClaim(new BigNumber(0), newChannel)
     this.sendClaim(signedChannel).catch(err =>
       this.master._log.error('Error sending proof-of-channel to peer: ', err)
     )
 
     this.master._log.debug(
-      `Successfully opened channel ${channelId} for ${format(wei(value))}`
+      `Successfully opened channel ${channelId} for ${this.master._format(
+        value,
+        'base'
+      )}`
     )
 
     return signedChannel
@@ -406,87 +479,194 @@ export default class EthereumAccount {
       )
 
     const totalNewValue = channel.value.plus(value)
-    const isDepositSuccessful = (
-      updatedChannel: PaymentChannel | undefined
-    ): updatedChannel is PaymentChannel =>
-      !!updatedChannel && updatedChannel.value.isEqualTo(totalNewValue)
-
     const channelId = channel.channelId
 
-    return prepareTransaction({
-      methodName: 'deposit',
-      params: [channelId],
-      contract: await this.master._contract,
-      gasPrice: await this.master._getGasPrice(),
-      value
-    })
-      .then(async ({ sendTransaction, txFee }) => {
-        await authorize(txFee)
+    /**
+     * TODO Should any of this check if the user has sufficient balance of ETH or ERC-20s first before submitting the tx?
+     * (to prevent just needlessly burning gas)
+     */
 
-        this.master._log.debug(
-          `Depositing ${format(wei(value))} to channel for fee of ${format(
-            wei(txFee)
-          )}`
-        )
-
-        await this.master._queueTransaction(sendTransaction)
-
-        // TODO If refreshChannel throws, is the behavior correct?
-        const updatedChannel = await this.refreshChannel(
-          channel,
-          isDepositSuccessful
-        )()
-
-        this.master._log.debug('Informing peer of channel top-up')
-        this.sendMessage({
-          type: TYPE_MESSAGE,
-          requestId: await generateBtpRequestId(),
-          data: {
-            protocolData: [
-              {
-                protocolName: 'channelDeposit',
-                contentType: MIME_APPLICATION_OCTET_STREAM,
-                data: Buffer.alloc(0)
-              }
-            ]
+    try {
+      const tokenContract = this.master._tokenContract
+      const txObj = !tokenContract
+        ? {
+            methodName: 'deposit',
+            params: [channelId],
+            contract: await this.master._contract,
+            gasPrice: await this.master._getGasPrice(),
+            value
           }
-        }).catch(err => {
-          this.master._log.error(
-            'Error informing peer of channel deposit:',
-            err
-          )
-        })
+        : {
+            methodName: 'deposit',
+            params: [channelId, value.toString()],
+            contract: await this.master._contract,
+            gasPrice: await this.master._getGasPrice()
+          }
 
-        this.master._log.debug(
-          `Successfully deposited ${format(
-            wei(value)
-          )} to channel ${channelId} for total value of ${format(
-            wei(totalNewValue)
-          )}`
-        )
+      const {
+        sendTransaction,
+        txFee
+      }: {
+        sendTransaction: () => Promise<TransactionReceipt>
+        txFee: BigNumber
+      } = await this.checkIfApproved(value).then(async requiresApproval => {
+        /** For ETH or unlocked ERC-20s, accurately estimate the gas */
+        if (!requiresApproval) {
+          const { txFee, sendTransaction } = await prepareTransaction(txObj)
+          await authorize(txFee)
+          return { txFee, sendTransaction }
+        } else {
+          /**
+           * If approving ERC-20 token transfers is required, overestimate the gas,
+           * using a combined upperbound for both transactions
+           */
+          const gasLimit = APPROVE_AND_DEPOSIT_GAS_LIMIT
 
-        const bestClaim = this.depositQueue!.clear()
-        delete this.depositQueue // Don't await the promise so no new tasks are added to the queue
+          const gasPrice = await this.master._getGasPrice()
+          const txFee = gasLimit.times(gasPrice)
+          await authorize(txFee)
 
-        // Merge the updated channel state with any claims sent in the side queue
-        const forkedState = await bestClaim
-        return forkedState
-          ? {
-              ...updatedChannel,
-              signature: forkedState.signature,
-              spent: forkedState.spent
+          const remainingGasLimit = await this.secureAllowance(gasLimit)
+
+          return prepareTransaction({
+            ...txObj,
+            gasLimit: remainingGasLimit
+          })
+        }
+      })
+
+      this.master._log.debug(
+        `Depositing ${this.master._format(
+          value,
+          'base'
+        )} to channel for fee of ${this.master._format(txFee, 'base')}`
+      )
+
+      const receipt = await this.master._queueTransaction(sendTransaction)
+
+      const didDeposit = hasEvent(receipt, 'DidDeposit')
+      if (!didDeposit) {
+        throw new Error('Failed to deposit')
+        // TODO This should error otherwise
+      }
+
+      const updatedChannel = {
+        ...channel,
+        value: totalNewValue
+      }
+
+      this.master._log.debug('Informing peer of channel top-up')
+      this.sendMessage({
+        type: TYPE_MESSAGE,
+        requestId: await generateBtpRequestId(),
+        data: {
+          protocolData: [
+            {
+              protocolName: 'channelDeposit',
+              contentType: MIME_APPLICATION_OCTET_STREAM,
+              data: Buffer.alloc(0)
             }
-          : updatedChannel
+          ]
+        }
+      }).catch(err => {
+        this.master._log.error('Error informing peer of channel deposit:', err)
       })
-      .catch(err => {
-        this.master._log.error(`Failed to deposit to channel:`, err)
 
-        // Since there's no updated state from the deposit, just use the state from the side queue
-        const bestClaim = this.depositQueue!.clear()
-        delete this.depositQueue // Don't await the promise so no new tasks are added to the queue
+      this.master._log.debug(
+        `Successfully deposited ${this.master._format(
+          value,
+          'base'
+        )} to channel ${channelId} for total value of ${this.master._format(
+          totalNewValue,
+          'base'
+        )}`
+      )
 
-        return bestClaim
-      })
+      const bestClaim = this.depositQueue.clear()
+      delete this.depositQueue // Don't await the promise so no new tasks are added to the queue
+
+      // Merge the updated channel state with any claims sent in the side queue
+      const forkedState = await bestClaim
+      return forkedState
+        ? {
+            ...updatedChannel,
+            signature: forkedState.signature,
+            spent: forkedState.spent
+          }
+        : updatedChannel
+    } catch (err) {
+      this.master._log.error(`Failed to deposit to channel:`, err)
+
+      // Since there's no updated state from the deposit, just use the state from the side queue
+      const bestClaim = this.depositQueue!.clear()
+      delete this.depositQueue // Don't await the promise so no new tasks are added to the queue
+
+      return bestClaim
+    }
+  }
+
+  /**
+   * Check if the Machinomy contract is approved to send the configured ERC-20 token
+   * from the configured Ethereum account
+   * @param minimumAllowance Minimum amount the contract must be approved to transfer into it
+   */
+  async checkIfApproved(minimumAllowance: BigNumber): Promise<boolean> {
+    if (!this.master._tokenContract) {
+      return false
+    }
+
+    const ownerAddress = this.master._wallet.address
+    const spenderAddress = (await this.master._contract).address
+
+    const allowance = await this.master._tokenContract.functions.allowance(
+      ownerAddress,
+      spenderAddress
+    )
+
+    return allowance.lt(minimumAllowance.toString())
+  }
+
+  /**
+   * Authorize the Machinomy token contract to send the configured ERC-20 token from the configured Ethereum account
+   * - Only needs to happen once, since we're authorizing for the largest possible value
+   * - Secure since all transfers to the Machinomy contract still require transactions from user
+   * @param gasLimit Total gas limit for the approve transaction and subsequent operations
+   * @returns Remaining gas available to spend from the given gas limit, after the approve transaction
+   */
+  async secureAllowance(gasLimit: BigNumber): Promise<BigNumber> {
+    if (!this.master._tokenContract) {
+      return gasLimit
+    }
+
+    const spenderAddress = (await this.master._contract).address
+
+    const { sendTransaction } = await prepareTransaction({
+      methodName: 'approve',
+      params: [spenderAddress, ethers.constants.MaxUint256],
+      contract: this.master._tokenContract,
+      gasPrice: await this.master._getGasPrice(),
+      gasLimit
+    })
+
+    this.master._log.debug(
+      `Unlocking transfers for ${this.master._assetCode} for account ${
+        this.account.ethereumAddress
+      }`
+    )
+
+    const receipt = await this.master._queueTransaction(sendTransaction)
+
+    const didApprove =
+      receipt.events && receipt.events.map(o => o.event).includes('Approval')
+    if (!didApprove) {
+      throw new Error(
+        `Failed to unlock transfers for ${this.master._assetCode}`
+      )
+    }
+
+    return receipt.gasUsed
+      ? gasLimit.minus(receipt.gasUsed.toString())
+      : new BigNumber(0)
   }
 
   /**
@@ -516,8 +696,10 @@ export default class EthereumAccount {
       )
     )
 
-    const settlementBudget = convert(gwei(this.account.payoutAmount), wei())
-    if (settlementBudget.lte(0)) {
+    const settlementBudget = this.master._convertToBaseUnit(
+      this.account.payoutAmount
+    )
+    if (settlementBudget.isLessThanOrEqualTo(0)) {
       return cachedChannel
     }
 
@@ -527,7 +709,7 @@ export default class EthereumAccount {
     }
 
     // Used to ensure the claim increment is always > 0
-    if (!remainingInChannel(cachedChannel).gt(0)) {
+    if (!remainingInChannel(cachedChannel).isGreaterThan(0)) {
       this.master._log.debug(
         `Cannot send claim to: no remaining funds in outgoing channel`
       )
@@ -548,12 +730,16 @@ export default class EthereumAccount {
     // Total value of new claim: value of old best claim + increment of new claim
     const value = spentFromChannel(cachedChannel).plus(claimIncrement)
 
-    const updatedChannel = this.signClaim(value, cachedChannel)
+    const updatedChannel = this.signClaim({
+      ...cachedChannel,
+      spent: value
+    })
 
     this.master._log.debug(
-      `Sending claim for total of ${format(
-        wei(value)
-      )}, incremented by ${format(wei(claimIncrement))}`
+      `Sending claim for total of ${this.master._format(
+        value,
+        'base'
+      )}, incremented by ${this.master._format(claimIncrement, 'base')}`
     )
 
     // Send paychan claim to client, don't await a response
@@ -564,10 +750,7 @@ export default class EthereumAccount {
       )
     )
 
-    const claimIncrementGwei = convert(
-      wei(claimIncrement),
-      gwei()
-    ).decimalPlaces(0, BigNumber.ROUND_DOWN)
+    const claimIncrementGwei = this.master._convertFromBaseUnit(claimIncrement)
 
     this.account.payableBalance = this.account.payableBalance.minus(
       claimIncrementGwei
@@ -581,10 +764,7 @@ export default class EthereumAccount {
     return updatedChannel
   }
 
-  signClaim(
-    value: BigNumber,
-    cachedChannel: PaymentChannel
-  ): ClaimablePaymentChannel {
+  signClaim(channel: PaymentChannel): ClaimablePaymentChannel {
     const secp256k1 = this.master._secp256k1!
 
     const {
@@ -593,9 +773,10 @@ export default class EthereumAccount {
     } = secp256k1.signMessageHashRecoverableCompact(
       hexToBuffer(this.master._wallet.privateKey),
       createPaymentDigest(
-        cachedChannel.contractAddress,
-        cachedChannel.channelId,
-        value.toString()
+        channel.contractAddress,
+        channel.channelId,
+        channel.spent.toString(),
+        channel.tokenContract
       )
     )
 
@@ -608,8 +789,7 @@ export default class EthereumAccount {
     const flatSignature = '0x' + Buffer.from(signature).toString('hex') + v
 
     return {
-      ...cachedChannel,
-      spent: value,
+      ...channel,
       signature: flatSignature
     }
   }
@@ -618,13 +798,15 @@ export default class EthereumAccount {
     channelId,
     signature,
     spent,
-    contractAddress
+    contractAddress,
+    tokenContract
   }: PaymentChannel) {
     const claim = {
       channelId,
       signature,
       value: spent.toString(),
-      contractAddress
+      contractAddress,
+      tokenContract
     }
 
     return this.sendMessage({
@@ -760,7 +942,8 @@ export default class EthereumAccount {
         typeof o.value === 'string' &&
         typeof o.channelId === 'string' &&
         typeof o.signature === 'string' &&
-        typeof o.contractAddress === 'string'
+        typeof o.contractAddress === 'string' &&
+        ['string', 'undefined'].includes(typeof o.tokenContract)
       if (!hasValidSchema(claim)) {
         this.master._log.debug('Invalid claim: schema is malformed')
         return []
@@ -804,11 +987,16 @@ export default class EthereumAccount {
         const newBalance = this.account.receivableBalance.plus(amount)
         if (newBalance.isGreaterThan(this.master._maxBalance)) {
           this.master._log.debug(
-            `Cannot forward PREPARE: cannot debit ${format(
-              gwei(amount)
-            )}: proposed balance of ${format(
-              gwei(newBalance)
-            )} exceeds maximum of ${format(gwei(this.master._maxBalance))}`
+            `Cannot forward PREPARE: cannot debit ${this.master._format(
+              amount,
+              'account'
+            )}: proposed balance of ${this.master._format(
+              newBalance,
+              'account'
+            )} exceeds maximum of ${this.master._format(
+              this.master._maxBalance,
+              'account'
+            )}`
           )
           throw new Errors.InsufficientLiquidityError(
             'Exceeded maximum balance'
@@ -816,9 +1004,10 @@ export default class EthereumAccount {
         }
 
         this.master._log.debug(
-          `Forwarding PREPARE: Debited ${format(
-            gwei(amount)
-          )}, new balance is ${format(gwei(newBalance))}`
+          `Forwarding PREPARE: Debited ${this.master._format(
+            amount,
+            'account'
+          )}, new balance is ${this.master._format(newBalance, 'account')}`
         )
         this.account.receivableBalance = newBalance
 
@@ -827,7 +1016,10 @@ export default class EthereumAccount {
 
         if (isReject(reply)) {
           this.master._log.debug(
-            `Credited ${format(gwei(amount))} in response to REJECT`
+            `Credited ${this.master._format(
+              amount,
+              'account'
+            )} in response to REJECT`
           )
           this.account.receivableBalance = this.account.receivableBalance.minus(
             amount
@@ -932,7 +1124,7 @@ export default class EthereumAccount {
 
       // `updatedChannel` is fetched using the id in the claim, so compare
       // against the previously linked channelId in `cachedChannel`
-      const wrongChannel = claim.channelId !== cachedChannel.channelId
+      const wrongChannel = claim.channelId !== cachedChannel.channelId // TODO Should it lowercase both? Does it need 0x?
       if (wrongChannel) {
         this.master._log.debug(
           'Invalid claim: channel is not the previously linked channel'
@@ -961,9 +1153,41 @@ export default class EthereumAccount {
       return cachedChannel
     }
 
+    // If using ERC-20 tokens, ensure the claim and channel are for the correct token
+    if (this.master._tokenContract) {
+      // Since channels are fetched from TokenUnidirectional, tokenContract is defined
+      const channelUsesWrongToken =
+        updatedChannel.tokenContract!.toLowerCase() !==
+        this.master._tokenContract.address.toLowerCase()
+      if (channelUsesWrongToken) {
+        this.master._log.debug(
+          'Invalid claim: channel is for the wrong ERC-20 token'
+        )
+        return cachedChannel
+      }
+
+      const claimUsesWrongToken =
+        !claim.tokenContract ||
+        claim.tokenContract.toLowerCase() !== // TODO Does the claim tokenContract always need to include 0x for this to work properly? (same with contract) Or is this approach safer?
+          this.master._tokenContract.address.toLowerCase()
+      if (claimUsesWrongToken) {
+        this.master._log.debug('Invalid claim: claim is for wrong ERC-20 token')
+        return cachedChannel
+      }
+    }
+    // If using ETH, ensure the claim is not for a token
+    else {
+      if (claim.tokenContract) {
+        this.master._log.debug(
+          'Invalid claim: claim is for ERC-20 token, not ETH'
+        )
+        return cachedChannel
+      }
+    }
+
     const isSigned = isValidClaimSignature(this.master._secp256k1!)(
       claim,
-      updatedChannel
+      updatedChannel.sender
     )
     if (!isSigned) {
       this.master._log.debug('Invalid claim: signature is invalid')
@@ -976,8 +1200,9 @@ export default class EthereumAccount {
     if (!sufficientChannelValue) {
       if (attempts > 20) {
         this.master._log.debug(
-          `Invalid claim: value of ${format(
-            wei(claim.value)
+          `Invalid claim: value of ${this.master._format(
+            claim.value,
+            'account'
           )} is above value of channel, despite several attempts to refresh channel state`
         )
         return cachedChannel
@@ -1024,19 +1249,20 @@ export default class EthereumAccount {
     const isBestClaim = claimIncrement.gt(0)
     if (!isBestClaim && cachedChannel) {
       this.master._log.debug(
-        `Invalid claim: value of ${format(
-          wei(claim.value)
-        )} is less than previous claim for ${format(wei(updatedChannel.spent))}`
+        `Invalid claim: value of ${this.master._format(
+          claim.value,
+          'base'
+        )} is less than previous claim for ${this.master._format(
+          updatedChannel.spent,
+          'base'
+        )}`
       )
       return cachedChannel
     }
 
     // Only perform balance operations if the claim increment is positive
     if (isBestClaim) {
-      const amount = convert(wei(claimIncrement), gwei()).dp(
-        0,
-        BigNumber.ROUND_DOWN
-      )
+      const amount = this.master._convertFromBaseUnit(claimIncrement)
 
       this.account.receivableBalance = this.account.receivableBalance.minus(
         amount
@@ -1048,7 +1274,7 @@ export default class EthereumAccount {
     this.master._log.debug(
       `Accepted incoming claim from account ${
         this.account.accountName
-      } for ${format(wei(claimIncrement))}`
+      } for ${this.master._format(claimIncrement, 'base')}`
     )
 
     // Start the channel watcher if it wasn't already running
@@ -1058,6 +1284,7 @@ export default class EthereumAccount {
 
     return {
       ...updatedChannel,
+      tokenContract: claim.tokenContract,
       channelId: claim.channelId,
       contractAddress: claim.contractAddress,
       signature: claim.signature,
@@ -1072,8 +1299,9 @@ export default class EthereumAccount {
       const amount = new BigNumber(prepare.amount)
 
       this.master._log.debug(
-        `Received a FULFILL in response to forwarded PREPARE: credited ${format(
-          gwei(amount)
+        `Received a FULFILL in response to forwarded PREPARE: credited ${this.master._format(
+          amount,
+          'account'
         )}`
       )
       this.account.payableBalance = this.account.payableBalance.plus(amount)
@@ -1164,8 +1392,9 @@ export default class EthereumAccount {
       }
 
       this.master._log.debug(
-        `Attempting to claim channel ${channelId} for ${format(
-          wei(updatedChannel.spent)
+        `Attempting to claim channel ${channelId} for ${this.master._format(
+          updatedChannel.spent,
+          'base'
         )}`
       )
 
@@ -1189,33 +1418,32 @@ export default class EthereumAccount {
         this.master._log.debug(
           `Not profitable to claim channel ${channelId} with ${
             this.account.accountName
-          }: fee of ${format(wei(txFee))} is greater than value of ${format(
-            wei(spent)
-          )}`
+          }: fee of ${this.master._format(
+            txFee,
+            'base'
+          )} is greater than value of ${this.master._format(spent, 'base')}`
         )
 
         return updatedChannel
       }
 
-      await this.master._queueTransaction(sendTransaction).catch(err => {
-        this.master._log.error(`Failed to claim channel:`, err)
-        throw err
-      })
+      const receipt = await this.master
+        ._queueTransaction(sendTransaction)
+        .catch(err => {
+          this.master._log.error(`Failed to claim channel:`, err)
+          throw err
+        })
 
-      // Ensure that we've successfully fetched the updated channel details before sending a new claim
-      // TODO Handle errors?
-      const closedChannel = await this.refreshChannel(
-        updatedChannel,
-        (channel): channel is undefined => !channel
-      )()
+      if (!hasEvent(receipt, 'DidClaim')) {
+        throw new Error(`Failed to claim channel ${channelId}`)
+      }
 
       this.master._log.debug(
-        `Successfully claimed incoming channel ${channelId} for ${format(
-          wei(spent)
+        `Successfully claimed incoming channel ${channelId} for ${this.master._format(
+          spent,
+          'base'
         )}`
       )
-
-      return closedChannel
     }, IncomingTaskPriority.ClaimChannel)
   }
 
@@ -1225,6 +1453,10 @@ export default class EthereumAccount {
       if (!cachedChannel) {
         return
       }
+
+      /**
+       * TODO Maybe the bilat protocol should include the tx receipt in the message?
+       */
 
       try {
         await this.sendMessage({
@@ -1251,8 +1483,9 @@ export default class EthereumAccount {
         this.master._log.debug(
           `Peer successfully closed our outgoing channel ${
             cachedChannel.channelId
-          }, returning at least ${format(
-            wei(remainingInChannel(cachedChannel))
+          }, returning at least ${this.master._format(
+            remainingInChannel(cachedChannel),
+            'base'
           )} of collateral`
         )
 

@@ -1,398 +1,401 @@
-[
-  {
-    "constant": true,
-    "inputs": [
-      {
-        "name": "",
-        "type": "bytes32"
-      }
-    ],
-    "name": "channels",
-    "outputs": [
-      {
-        "name": "sender",
-        "type": "address"
-      },
-      {
-        "name": "receiver",
-        "type": "address"
-      },
-      {
-        "name": "value",
-        "type": "uint256"
-      },
-      {
-        "name": "settlingPeriod",
-        "type": "uint256"
-      },
-      {
-        "name": "settlingUntil",
-        "type": "uint256"
-      }
-    ],
-    "payable": false,
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "name": "channelId",
-        "type": "bytes32"
-      },
-      {
-        "indexed": true,
-        "name": "sender",
-        "type": "address"
-      },
-      {
-        "indexed": true,
-        "name": "receiver",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "name": "value",
-        "type": "uint256"
-      }
-    ],
-    "name": "DidOpen",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "name": "channelId",
-        "type": "bytes32"
-      },
-      {
-        "indexed": false,
-        "name": "deposit",
-        "type": "uint256"
-      }
-    ],
-    "name": "DidDeposit",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "name": "channelId",
-        "type": "bytes32"
-      }
-    ],
-    "name": "DidClaim",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "name": "channelId",
-        "type": "bytes32"
-      }
-    ],
-    "name": "DidStartSettling",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "name": "channelId",
-        "type": "bytes32"
-      }
-    ],
-    "name": "DidSettle",
-    "type": "event"
-  },
-  {
-    "constant": false,
-    "inputs": [
-      {
-        "name": "channelId",
-        "type": "bytes32"
-      },
-      {
-        "name": "receiver",
-        "type": "address"
-      },
-      {
-        "name": "settlingPeriod",
-        "type": "uint256"
-      }
-    ],
-    "name": "open",
-    "outputs": [],
-    "payable": true,
-    "stateMutability": "payable",
-    "type": "function"
-  },
-  {
-    "constant": true,
-    "inputs": [
-      {
-        "name": "channelId",
-        "type": "bytes32"
-      },
-      {
-        "name": "origin",
-        "type": "address"
-      }
-    ],
-    "name": "canDeposit",
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "payable": false,
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "constant": false,
-    "inputs": [
-      {
-        "name": "channelId",
-        "type": "bytes32"
-      }
-    ],
-    "name": "deposit",
-    "outputs": [],
-    "payable": true,
-    "stateMutability": "payable",
-    "type": "function"
-  },
-  {
-    "constant": true,
-    "inputs": [
-      {
-        "name": "channelId",
-        "type": "bytes32"
-      },
-      {
-        "name": "origin",
-        "type": "address"
-      }
-    ],
-    "name": "canStartSettling",
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "payable": false,
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "constant": false,
-    "inputs": [
-      {
-        "name": "channelId",
-        "type": "bytes32"
-      }
-    ],
-    "name": "startSettling",
-    "outputs": [],
-    "payable": false,
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "constant": true,
-    "inputs": [
-      {
-        "name": "channelId",
-        "type": "bytes32"
-      }
-    ],
-    "name": "canSettle",
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "payable": false,
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "constant": false,
-    "inputs": [
-      {
-        "name": "channelId",
-        "type": "bytes32"
-      }
-    ],
-    "name": "settle",
-    "outputs": [],
-    "payable": false,
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "constant": true,
-    "inputs": [
-      {
-        "name": "channelId",
-        "type": "bytes32"
-      },
-      {
-        "name": "payment",
-        "type": "uint256"
-      },
-      {
-        "name": "origin",
-        "type": "address"
-      },
-      {
-        "name": "signature",
-        "type": "bytes"
-      }
-    ],
-    "name": "canClaim",
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "payable": false,
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "constant": false,
-    "inputs": [
-      {
-        "name": "channelId",
-        "type": "bytes32"
-      },
-      {
-        "name": "payment",
-        "type": "uint256"
-      },
-      {
-        "name": "signature",
-        "type": "bytes"
-      }
-    ],
-    "name": "claim",
-    "outputs": [],
-    "payable": false,
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "constant": true,
-    "inputs": [
-      {
-        "name": "channelId",
-        "type": "bytes32"
-      }
-    ],
-    "name": "isPresent",
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "payable": false,
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "constant": true,
-    "inputs": [
-      {
-        "name": "channelId",
-        "type": "bytes32"
-      }
-    ],
-    "name": "isAbsent",
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "payable": false,
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "constant": true,
-    "inputs": [
-      {
-        "name": "channelId",
-        "type": "bytes32"
-      }
-    ],
-    "name": "isSettling",
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "payable": false,
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "constant": true,
-    "inputs": [
-      {
-        "name": "channelId",
-        "type": "bytes32"
-      }
-    ],
-    "name": "isOpen",
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "payable": false,
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "constant": true,
-    "inputs": [
-      {
-        "name": "channelId",
-        "type": "bytes32"
-      },
-      {
-        "name": "payment",
-        "type": "uint256"
-      }
-    ],
-    "name": "paymentDigest",
-    "outputs": [
-      {
-        "name": "",
-        "type": "bytes32"
-      }
-    ],
-    "payable": false,
-    "stateMutability": "view",
-    "type": "function"
-  }
-]
+{
+  "bytecode": "0x608060405234801561001057600080fd5b50610d75806100206000396000f3006080604052600436106100d95763ffffffff7c0100000000000000000000000000000000000000000000000000000000600035041662f31e7681146100de5780632f8f0c921461010a57806341b6fcf71461012e5780634722361c1461010a578063605466021461015b5780636683f9ae146101735780637964ea871461018b5780637a7ebd7b146101ed5780637c35be7a1461023c578063987757dd14610254578063ad3790891461026c578063b214faa514610284578063e62eea471461028f578063ec8be5b9146102a7578063fd745bce14610313575b600080fd5b3480156100ea57600080fd5b506100f660043561032d565b604080519115158252519081900360200190f35b34801561011657600080fd5b506100f6600435600160a060020a036024351661033f565b34801561013a57600080fd5b506101496004356024356103c0565b60408051918252519081900360200190f35b34801561016757600080fd5b506100f6600435610461565b34801561017f57600080fd5b506100f66004356104cb565b34801561019757600080fd5b50604080516020600460443581810135601f81018490048402850184019095528484526101eb9482359460248035953695946064949201919081908401838280828437509497506105349650505050505050565b005b3480156101f957600080fd5b506102056004356106fb565b60408051600160a060020a039687168152949095166020850152838501929092526060830152608082015290519081900360a00190f35b34801561024857600080fd5b506100f6600435610736565b34801561026057600080fd5b506101eb600435610757565b34801561027857600080fd5b506100f6600435610830565b6101eb6004356108c3565b34801561029b57600080fd5b506101eb600435610929565b3480156102b357600080fd5b50604080516020601f6064356004818101359283018490048402850184019095528184526100f6948035946024803595600160a060020a0360443516953695608494930191819084018382808284375094975061098a9650505050505050565b6101eb600435600160a060020a0360243516604435610a39565b600061033882610461565b1592915050565b6000610349610d07565b5060008381526020818152604091829020825160a0810184528154600160a060020a039081168083526001840154821694830194909452600283015494820194909452600382015460608201526004909101546080820152918416146103ae85610736565b80156103b75750805b95945050505050565b604080516c010000000000000000000000003002602080830191909152603482018590526054808301859052835180840390910181526074909201928390528151600093918291908401908083835b6020831061042e5780518252601f19909201916020918201910161040f565b5181516020939093036101000a600019018019909116921691909117905260405192018290039091209695505050505050565b600061046b610d07565b505060008181526020818152604091829020825160a0810184528154600160a060020a0390811680835260018401549091169382019390935260028201549381019390935260038101546060840152600401546080830152159050919050565b60006104d5610d07565b505060009081526020818152604091829020825160a0810184528154600160a060020a03908116825260018301541692810192909252600281015492820192909252600382015460608201526004909101546080909101819052151590565b61053c610d07565b6105488484338561098a565b151561055357600080fd5b5060008381526020818152604091829020825160a0810184528154600160a060020a039081168252600183015416928101929092526002810154928201839052600381015460608301526004015460808201529083106105f4578060200151600160a060020a03166108fc82604001519081150290604051600060405180830381858888f193505050501580156105ee573d6000803e3d6000fd5b50610684565b8060200151600160a060020a03166108fc849081150290604051600060405180830381858888f19350505050158015610631573d6000803e3d6000fd5b508060000151600160a060020a03166108fc61065a858460400151610b1890919063ffffffff16565b6040518115909202916000818181858888f19350505050158015610682573d6000803e3d6000fd5b505b600084815260208190526040808220805473ffffffffffffffffffffffffffffffffffffffff199081168255600182018054909116905560028101839055600381018390556004018290555185917f3de43c9e481138453c3cfea2781e18a609abb6448556669b257edc7de710fd6491a250505050565b60006020819052908152604090208054600182015460028301546003840154600490940154600160a060020a03938416949390921692909185565b60006107418261032d565b80156107515750610338826104cb565b92915050565b600061076282610830565b151561076d57600080fd5b506000818152602081905260408082208054600282015492519193600160a060020a039091169280156108fc02929091818181858888f193505050501580156107ba573d6000803e3d6000fd5b50600082815260208190526040808220805473ffffffffffffffffffffffffffffffffffffffff199081168255600182018054909116905560028101839055600381018390556004018290555183917f74fb75c3de2cff5e8a78cf9b1f49a5bea60126b42ed45bb4b2b25b7da03e4d1b91a25050565b600061083a610d07565b50600082815260208181526040808320815160a0810183528154600160a060020a039081168252600183015416938101939093526002810154918301919091526003810154606083015260040154608082015290610897846104cb565b80156108a7575081608001514310155b90506108b2846104cb565b80156108bb5750805b949350505050565b6108cd813361033f565b15156108d857600080fd5b600081815260208181526040918290206002018054349081019091558251908152915183927f6f850cda6d6b2f5cca622bc2d4739e4ed917c12d29f9a92b9e6c127abe39842492908290030190a250565b6000610935823361033f565b151561094057600080fd5b506000818152602081905260408082206003810154430160048201559051909183917fd6461a3a92fd600fe23f236b2e25c2fd0c197a66b2f990989f0b210d578f46179190a25050565b6000610994610d07565b50600085815260208181526040808320815160a0810183528154600160a060020a039081168252600183015481169482018590526002830154938201939093526003820154606082015260049091015460808201529290861690911490806109fc8989610b2a565b9150610a088287610c32565b600160a060020a03168460000151600160a060020a0316149050828015610a2c5750805b9998505050505050505050565b610a4283610461565b1515610a4d57600080fd5b6040805160a08101825233808252600160a060020a03858116602080850182815234868801818152606088018a8152600060808a018181528e8252818752908b902099518a5490891673ffffffffffffffffffffffffffffffffffffffff19918216178b55945160018b01805491909916951694909417909655516002880155935160038701555160049095019490945584519182529351919287927f2f7cfc632227c054da7caaf75268353dba6206f53e9f7a547a193e66ab8c94dc9281900390910190a4505050565b600082821115610b2457fe5b50900390565b60408051808201909152601c81527f19457468657265756d205369676e6564204d6573736167653a0a333200000000602082015260009080610b6c85856103c0565b6040516020018083805190602001908083835b60208310610b9e5780518252601f199092019160209182019101610b7f565b51815160209384036101000a600019018019909216911617905292019384525060408051808503815293820190819052835193945092839250908401908083835b60208310610bfe5780518252601f199092019160209182019101610bdf565b5181516020939093036101000a60001901801990911692169190911790526040519201829003909120979650505050505050565b60008060008084516041141515610c4c5760009350610cfe565b50505060208201516040830151606084015160001a601b60ff82161015610c7157601b015b8060ff16601b14158015610c8957508060ff16601c14155b15610c975760009350610cfe565b60408051600080825260208083018085528a905260ff8516838501526060830187905260808301869052925160019360a0808501949193601f19840193928390039091019190865af1158015610cf1573d6000803e3d6000fd5b5050506020604051035193505b50505092915050565b60a0604051908101604052806000600160a060020a031681526020016000600160a060020a0316815260200160008152602001600081526020016000815250905600a165627a7a72305820ed228e45a3b78856197decd7d98d6c8cee748b84b3c25cccaf2189380766290e0029",
+  "abi": [
+    {
+      "constant": true,
+      "inputs": [
+        {
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "name": "channels",
+      "outputs": [
+        {
+          "name": "sender",
+          "type": "address"
+        },
+        {
+          "name": "receiver",
+          "type": "address"
+        },
+        {
+          "name": "value",
+          "type": "uint256"
+        },
+        {
+          "name": "settlingPeriod",
+          "type": "uint256"
+        },
+        {
+          "name": "settlingUntil",
+          "type": "uint256"
+        }
+      ],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "name": "channelId",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "name": "sender",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "name": "receiver",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "name": "value",
+          "type": "uint256"
+        }
+      ],
+      "name": "DidOpen",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "name": "channelId",
+          "type": "bytes32"
+        },
+        {
+          "indexed": false,
+          "name": "deposit",
+          "type": "uint256"
+        }
+      ],
+      "name": "DidDeposit",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "name": "channelId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "DidClaim",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "name": "channelId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "DidStartSettling",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "name": "channelId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "DidSettle",
+      "type": "event"
+    },
+    {
+      "constant": false,
+      "inputs": [
+        {
+          "name": "channelId",
+          "type": "bytes32"
+        },
+        {
+          "name": "receiver",
+          "type": "address"
+        },
+        {
+          "name": "settlingPeriod",
+          "type": "uint256"
+        }
+      ],
+      "name": "open",
+      "outputs": [],
+      "payable": true,
+      "stateMutability": "payable",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [
+        {
+          "name": "channelId",
+          "type": "bytes32"
+        },
+        {
+          "name": "origin",
+          "type": "address"
+        }
+      ],
+      "name": "canDeposit",
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": false,
+      "inputs": [
+        {
+          "name": "channelId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "deposit",
+      "outputs": [],
+      "payable": true,
+      "stateMutability": "payable",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [
+        {
+          "name": "channelId",
+          "type": "bytes32"
+        },
+        {
+          "name": "origin",
+          "type": "address"
+        }
+      ],
+      "name": "canStartSettling",
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": false,
+      "inputs": [
+        {
+          "name": "channelId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "startSettling",
+      "outputs": [],
+      "payable": false,
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [
+        {
+          "name": "channelId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "canSettle",
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": false,
+      "inputs": [
+        {
+          "name": "channelId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "settle",
+      "outputs": [],
+      "payable": false,
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [
+        {
+          "name": "channelId",
+          "type": "bytes32"
+        },
+        {
+          "name": "payment",
+          "type": "uint256"
+        },
+        {
+          "name": "origin",
+          "type": "address"
+        },
+        {
+          "name": "signature",
+          "type": "bytes"
+        }
+      ],
+      "name": "canClaim",
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": false,
+      "inputs": [
+        {
+          "name": "channelId",
+          "type": "bytes32"
+        },
+        {
+          "name": "payment",
+          "type": "uint256"
+        },
+        {
+          "name": "signature",
+          "type": "bytes"
+        }
+      ],
+      "name": "claim",
+      "outputs": [],
+      "payable": false,
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [
+        {
+          "name": "channelId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "isPresent",
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [
+        {
+          "name": "channelId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "isAbsent",
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [
+        {
+          "name": "channelId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "isSettling",
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [
+        {
+          "name": "channelId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "isOpen",
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [
+        {
+          "name": "channelId",
+          "type": "bytes32"
+        },
+        {
+          "name": "payment",
+          "type": "uint256"
+        }
+      ],
+      "name": "paymentDigest",
+      "outputs": [
+        {
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ]
+}

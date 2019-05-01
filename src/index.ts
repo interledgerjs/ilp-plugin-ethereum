@@ -27,6 +27,7 @@ import {
 } from './utils/channel'
 import ReducerQueue from './utils/queue'
 import { MemoryStore, StoreWrapper } from './utils/store'
+import ERC20_ARTIFACT from 'openzeppelin-solidity/build/contracts/ERC20Detailed.json'
 
 registerProtocolNames(['machinomy', 'requestClose', 'channelDeposit'])
 
@@ -64,19 +65,16 @@ export interface EthereumPluginOpts
    * Private key of the Ethereum account used to send and receive
    * - Corresponds to the Ethereum address shared with peers
    */
-  ethereumPrivateKey: string
+  ethereumPrivateKey?: string
+
+  /** Name of an Ethereum chain to create an Infura provider with Etherscan fallback */
+  ethereumProvider?: 'homestead' | 'kovan' | 'ropsten' | 'rinkeby'
 
   /**
-   * Ethers Ethereum provider to query the network,
-   * or the name of an Ethereum chain to create an
-   * Infura and Etherscan fallback provider
+   * Ethers wallet used to sign transactions and provider to query the network
+   * - Supercedes any private key or provider name config
    */
-  ethereumProvider?:
-    | 'homestead'
-    | 'kovan'
-    | 'ropsten'
-    | 'rinkeby'
-    | ethers.providers.Provider
+  ethereumWallet?: ethers.Wallet
 
   /** Default amount to fund when opening a new channel or depositing to a depleted channel (gwei) */
   outgoingChannelAmount?: BigNumber.Value
@@ -101,8 +99,17 @@ export interface EthereumPluginOpts
   /** Number of ms between runs of the channel watcher to check if a dispute was started */
   channelWatcherInterval?: BigNumber.Value
 
-  /** Query the currenct gas price, if it was supplied */
+  /**
+   * Callback for fetching the currenct gas price
+   * - Defaults to using the eth_estimateGas RPC with the connected Ethereum node
+   */
   getGasPrice?: () => Promise<BigNumber.Value>
+
+  /** Custom address for the Machinomy contract used */
+  contractAddress?: string
+
+  /** Address of the ERC-20 token contract to use for the token in the payment channel */
+  tokenContract?: string
 }
 
 const OUTGOING_CHANNEL_AMOUNT_GWEI = convert(eth('0.05'), gwei())
@@ -134,19 +141,40 @@ export default class EthereumPlugin extends EventEmitter2
   _contract: Promise<ethers.Contract>
   _dataHandler: DataHandler = defaultDataHandler
   _moneyHandler: MoneyHandler = defaultMoneyHandler
+  _tokenContract?: ethers.Contract
+
+  /**
+   * Orders of magnitude between the base unit, or smallest on-ledger denomination (e.g. wei)
+   * and the unit used for accounting and in ILP packets (e.g. gwei)
+   *
+   * TODO When migrating to settlement engine, this should be configurable so the ILP scale is independent of the settlement scale
+   */
+  _accountingScale = 9
+
+  /**
+   * Orders of magnitude between the base unit, or smallest on-ledger denomination (e.g. wei),
+   * and the unit of exchange (e.g. ether)
+   */
+  _assetScale = 18
+
+  /** Symbol of the asset exchanged */
+  _assetCode = 'ETH'
 
   constructor(
     {
       role = 'client',
       ethereumPrivateKey,
       ethereumProvider = 'homestead',
+      ethereumWallet,
       getGasPrice,
       outgoingChannelAmount = OUTGOING_CHANNEL_AMOUNT_GWEI,
       minIncomingChannelAmount = Infinity,
       outgoingDisputePeriod = OUTGOING_DISPUTE_PERIOD_BLOCKS,
       minIncomingDisputePeriod = MIN_INCOMING_DISPUTE_PERIOD_BLOCKS,
       maxPacketAmount = Infinity,
-      channelWatcherInterval = CHANNEL_WATCHER_INTERVAL_MS, // By default, every 60 seconds
+      channelWatcherInterval = CHANNEL_WATCHER_INTERVAL_MS,
+      contractAddress,
+      tokenContract,
       // All remaining params are passed to mini-accounts/plugin-btp
       ...opts
     }: EthereumPluginOpts,
@@ -154,12 +182,16 @@ export default class EthereumPlugin extends EventEmitter2
   ) {
     super()
 
-    const provider =
-      typeof ethereumProvider === 'object'
-        ? ethereumProvider
-        : ethers.getDefaultProvider(ethereumProvider)
-
-    this._wallet = new ethers.Wallet(ethereumPrivateKey, provider)
+    if (ethereumWallet) {
+      this._wallet = ethereumWallet
+    } else if (ethereumPrivateKey) {
+      this._wallet = new ethers.Wallet(
+        ethereumPrivateKey,
+        ethers.getDefaultProvider(ethereumProvider)
+      )
+    } else {
+      throw new Error('Private key or Ethers wallet must be configured')
+    }
 
     this._store = new StoreWrapper(store)
     this._log = log || createLogger(`ilp-plugin-ethereum-${role}`)
@@ -175,10 +207,22 @@ export default class EthereumPlugin extends EventEmitter2
 
     // Cache the ABI/address of the contract corresponding to the chain we're connected to
     // If this promise rejects, connect() will also reject since loading accounts await this
-    this._contract = getContract(this._wallet).catch(err => {
+    this._contract = getContract(
+      this._wallet,
+      !!tokenContract,
+      contractAddress
+    ).catch(err => {
       this._log.error('Failed to load contract ABI and address:', err)
       throw err
     })
+
+    if (tokenContract) {
+      this._tokenContract = new ethers.Contract(
+        tokenContract,
+        ERC20_ARTIFACT.abi,
+        this._wallet
+      )
+    }
 
     this._outgoingChannelAmount = convert(gwei(outgoingChannelAmount), wei())
       .abs()
@@ -298,8 +342,8 @@ export default class EthereumPlugin extends EventEmitter2
     return this._accounts.get(accountName)!
   }
 
-  async _queueTransaction(sendTransaction: () => Promise<void>) {
-    await new Promise<void>((resolve, reject) => {
+  _queueTransaction<T>(sendTransaction: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
       this._txPipeline = this._txPipeline
         .then(sendTransaction)
         .then(resolve, reject)
@@ -308,6 +352,27 @@ export default class EthereumPlugin extends EventEmitter2
 
   async connect() {
     this._secp256k1 = await instantiateSecp256k1()
+
+    /**
+     * TODO Should this also lookup the contract address and load the correct ABI based on the bytecode at that address?
+     */
+
+    // Load asset scale and symbol from ERC-20 contract
+    if (this._tokenContract) {
+      this._assetCode = await this._tokenContract.functions
+        .symbol()
+        .catch(() => 'tokens')
+
+      this._assetScale = await this._tokenContract.functions
+        .decimals()
+        .then((num: ethers.utils.BigNumber) => num.toNumber())
+        .catch(() => {
+          this._log.info(
+            `Configured ERC-20 doesn't have decimal place metadata; defaulting to 18 decimal places`
+          )
+          return 18
+        })
+    }
 
     // Load all accounts from the store
     await this._store.loadObject('accounts')
@@ -379,5 +444,25 @@ export default class EthereumPlugin extends EventEmitter2
   deregisterMoneyHandler() {
     this._moneyHandler = defaultMoneyHandler
     return this._plugin.deregisterMoneyHandler()
+  }
+
+  _format(num: BigNumber.Value, unit: 'base' | 'account') {
+    const scale =
+      (unit === 'base' ? 0 : this._accountingScale) - this._assetScale
+    const amountInExchangeUnits = new BigNumber(num).shiftedBy(scale)
+
+    return amountInExchangeUnits + ' ' + this._assetCode
+  }
+
+  _convertToBaseUnit(num: BigNumber) {
+    return num
+      .shiftedBy(this._assetScale - this._accountingScale)
+      .decimalPlaces(0, BigNumber.ROUND_DOWN)
+  }
+
+  _convertFromBaseUnit(num: BigNumber) {
+    return num
+      .shiftedBy(this._accountingScale - this._assetScale)
+      .decimalPlaces(0, BigNumber.ROUND_DOWN)
   }
 }
