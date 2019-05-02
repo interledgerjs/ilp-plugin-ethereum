@@ -34,8 +34,6 @@ registerProtocolNames(['machinomy', 'requestClose', 'channelDeposit'])
 // Almost never use exponential notation
 BigNumber.config({ EXPONENTIAL_AT: 1e9 })
 
-// TODO Should the default handlers return ILP reject packets? Should they error period?
-
 const defaultDataHandler: DataHandler = () => {
   throw new Error('no request handler registered')
 }
@@ -67,8 +65,16 @@ export interface EthereumPluginOpts
    */
   ethereumPrivateKey?: string
 
-  /** Name of an Ethereum chain to create an Infura provider with Etherscan fallback */
-  ethereumProvider?: 'homestead' | 'kovan' | 'ropsten' | 'rinkeby'
+  /**
+   * Name of an Ethereum chain to create an Infura provider with Etherscan fallback,
+   * or a custom Ethers Ethereum provider to query the network
+   */
+  ethereumProvider?:
+    | 'homestead'
+    | 'kovan'
+    | 'ropsten'
+    | 'rinkeby'
+    | ethers.providers.Provider
 
   /**
    * Ethers wallet used to sign transactions and provider to query the network
@@ -146,8 +152,6 @@ export default class EthereumPlugin extends EventEmitter2
   /**
    * Orders of magnitude between the base unit, or smallest on-ledger denomination (e.g. wei)
    * and the unit used for accounting and in ILP packets (e.g. gwei)
-   *
-   * TODO When migrating to settlement engine, this should be configurable so the ILP scale is independent of the settlement scale
    */
   _accountingScale = 9
 
@@ -185,10 +189,12 @@ export default class EthereumPlugin extends EventEmitter2
     if (ethereumWallet) {
       this._wallet = ethereumWallet
     } else if (ethereumPrivateKey) {
-      this._wallet = new ethers.Wallet(
-        ethereumPrivateKey,
-        ethers.getDefaultProvider(ethereumProvider)
-      )
+      const provider =
+        typeof ethereumProvider === 'string'
+          ? ethers.getDefaultProvider(ethereumProvider)
+          : ethereumProvider
+
+      this._wallet = new ethers.Wallet(ethereumPrivateKey, provider)
     } else {
       throw new Error('Private key or Ethers wallet must be configured')
     }
@@ -318,7 +324,9 @@ export default class EthereumPlugin extends EventEmitter2
             accountData && accountData.incoming
               ? await updateChannel(
                   await this._contract,
-                  deserializePaymentChannel(accountData.incoming)
+                  deserializePaymentChannel(
+                    accountData.incoming
+                  ) as ClaimablePaymentChannel
                 )
               : undefined
           ),
@@ -352,10 +360,6 @@ export default class EthereumPlugin extends EventEmitter2
 
   async connect() {
     this._secp256k1 = await instantiateSecp256k1()
-
-    /**
-     * TODO Should this also lookup the contract address and load the correct ABI based on the bytecode at that address?
-     */
 
     // Load asset scale and symbol from ERC-20 contract
     if (this._tokenContract) {

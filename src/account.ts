@@ -7,6 +7,7 @@ import {
 } from 'btp-packet'
 import { randomBytes } from 'crypto'
 import { ethers } from 'ethers'
+import { TransactionReceipt } from 'ethers/providers'
 import {
   deserializeIlpPrepare,
   deserializeIlpReply,
@@ -24,22 +25,23 @@ import { DataHandler, MoneyHandler } from './types/plugin'
 import {
   ClaimablePaymentChannel,
   createPaymentDigest,
-  fetchChannel,
+  fetchChannelById,
   generateChannelId,
   hasClaim,
+  hasEvent,
+  hexToBuffer,
   isDisputed,
   isValidClaimSignature,
   PaymentChannel,
   prepareTransaction,
   remainingInChannel,
   SerializedClaim,
+  SerializedClaimablePaymentChannel,
+  SerializedPaymentChannel,
   spentFromChannel,
-  updateChannel,
-  hexToBuffer,
-  hasEvent
+  updateChannel
 } from './utils/channel'
 import ReducerQueue from './utils/queue'
-import { TransactionReceipt } from 'ethers/providers'
 
 // Almost never use exponential notation
 BigNumber.config({ EXPONENTIAL_AT: 1e9 })
@@ -76,8 +78,8 @@ export interface SerializedAccountData {
   payableBalance: string
   payoutAmount: string
   ethereumAddress?: string
-  incoming?: ClaimablePaymentChannel
-  outgoing?: PaymentChannel
+  incoming?: SerializedClaimablePaymentChannel
+  outgoing?: SerializedPaymentChannel
 }
 
 export interface AccountData {
@@ -294,8 +296,7 @@ export default class EthereumAccount {
     value: BigNumber,
     authorize: (fee: BigNumber) => Promise<void> = () => Promise.resolve()
   ) {
-    // TODO Do I need any error handling here!?
-    await this.account.outgoing.add(cachedChannel =>
+    return this.account.outgoing.add(cachedChannel =>
       cachedChannel
         ? this.depositToChannel(cachedChannel, value, authorize)
         : this.openChannel(value, authorize)
@@ -391,6 +392,15 @@ export default class EthereumAccount {
       /** For ETH or unlocked ERC-20s, accurately estimate the gas */
       if (!requiresApproval) {
         const { txFee, sendTransaction } = await prepareTransaction(txObj)
+
+        const hasSufficientBalance = await this.checkIfSufficientBalance(
+          value,
+          txFee
+        )
+        if (!hasSufficientBalance) {
+          throw new Error('ETH balance is insufficient to open channel')
+        }
+
         await authorize(txFee)
         return { txFee, sendTransaction }
       } else {
@@ -402,6 +412,17 @@ export default class EthereumAccount {
 
         const gasPrice = await this.master._getGasPrice()
         const txFee = gasLimit.times(gasPrice)
+
+        const hasSufficientBalance = await this.checkIfSufficientBalance(
+          value,
+          txFee
+        )
+        if (!hasSufficientBalance) {
+          throw new Error(
+            'ERC-20 balance or ETH balance is insufficient to open channel'
+          )
+        }
+
         await authorize(txFee)
 
         const remainingGasLimit = await this.secureAllowance(gasLimit)
@@ -427,7 +448,8 @@ export default class EthereumAccount {
         throw err
       })
 
-    if (!hasEvent(receipt, 'DidOpen')) {
+    const didOpen = hasEvent(receipt, 'DidOpen')
+    if (!didOpen) {
       throw new Error('Failed to open new channel')
     }
 
@@ -481,11 +503,6 @@ export default class EthereumAccount {
     const totalNewValue = channel.value.plus(value)
     const channelId = channel.channelId
 
-    /**
-     * TODO Should any of this check if the user has sufficient balance of ETH or ERC-20s first before submitting the tx?
-     * (to prevent just needlessly burning gas)
-     */
-
     try {
       const tokenContract = this.master._tokenContract
       const txObj = !tokenContract
@@ -513,6 +530,15 @@ export default class EthereumAccount {
         /** For ETH or unlocked ERC-20s, accurately estimate the gas */
         if (!requiresApproval) {
           const { txFee, sendTransaction } = await prepareTransaction(txObj)
+
+          const hasSufficientBalance = await this.checkIfSufficientBalance(
+            value,
+            txFee
+          )
+          if (!hasSufficientBalance) {
+            throw new Error('ETH balance is insufficient for deposit')
+          }
+
           await authorize(txFee)
           return { txFee, sendTransaction }
         } else {
@@ -524,6 +550,17 @@ export default class EthereumAccount {
 
           const gasPrice = await this.master._getGasPrice()
           const txFee = gasLimit.times(gasPrice)
+
+          const hasSufficientBalance = await this.checkIfSufficientBalance(
+            value,
+            txFee
+          )
+          if (!hasSufficientBalance) {
+            throw new Error(
+              'ERC-20 balance or ETH balance is insufficient for deposit'
+            )
+          }
+
           await authorize(txFee)
 
           const remainingGasLimit = await this.secureAllowance(gasLimit)
@@ -546,8 +583,7 @@ export default class EthereumAccount {
 
       const didDeposit = hasEvent(receipt, 'DidDeposit')
       if (!didDeposit) {
-        throw new Error('Failed to deposit')
-        // TODO This should error otherwise
+        throw new Error(`Failed to deposit to channel ${channelId}`)
       }
 
       const updatedChannel = {
@@ -602,6 +638,35 @@ export default class EthereumAccount {
       delete this.depositQueue // Don't await the promise so no new tasks are added to the queue
 
       return bestClaim
+    }
+  }
+
+  /**
+   * Check that the Ethereum account has sufficient ether and token balances to complete the transaction
+   * @param value Amount to be sent to contract, in either ETH (units of wei) or the configured ERC-20 (denominated in its base unit)
+   * @param fee Transaction fee in ETH, always denominated in units of wei
+   */
+  async checkIfSufficientBalance(
+    value: BigNumber,
+    fee: BigNumber
+  ): Promise<boolean> {
+    const etherBalance = new BigNumber(
+      (await this.master._wallet.getBalance()).toString()
+    )
+
+    if (!this.master._tokenContract) {
+      return etherBalance.isGreaterThanOrEqualTo(value.plus(fee))
+    } else {
+      const tokenBalance = new BigNumber(
+        (await this.master._tokenContract.functions.balanceOf(
+          this.master._wallet.address
+        )).toString()
+      )
+
+      return (
+        tokenBalance.isGreaterThanOrEqualTo(value) &&
+        etherBalance.isGreaterThanOrEqualTo(fee)
+      )
     }
   }
 
@@ -1055,6 +1120,9 @@ export default class EthereumAccount {
    * Given an unvalidated claim and the current channel state, return either:
    * (1) the previous state, or
    * (2) new state updated with the valid claim
+   *
+   * TODO: Add test cases for sending claims with varying lengths of hex strings, with and without 0x prefix
+   * (current approach of checking string equality likely circumvents those issues)
    */
   validateClaim = (claim: SerializedClaim) => async (
     cachedChannel: ClaimablePaymentChannel | undefined,
@@ -1065,7 +1133,7 @@ export default class EthereumAccount {
       !cachedChannel ||
       new BigNumber(claim.value).isGreaterThan(cachedChannel.value)
     const updatedChannel = shouldFetchChannel
-      ? await fetchChannel(await this.master._contract, claim.channelId) // TODO Make sure using the claim id here is safe!
+      ? await fetchChannelById(await this.master._contract, claim.channelId)
       : cachedChannel
 
     // Perform checks to link a new channel
@@ -1122,9 +1190,9 @@ export default class EthereumAccount {
         return cachedChannel
       }
 
-      // `updatedChannel` is fetched using the id in the claim, so compare
-      // against the previously linked channelId in `cachedChannel`
-      const wrongChannel = claim.channelId !== cachedChannel.channelId // TODO Should it lowercase both? Does it need 0x?
+      // `updatedChannel` is fetched using the ID in the claim, so compare against previously linked channelId
+      const wrongChannel =
+        claim.channelId.toLowerCase() !== cachedChannel.channelId.toLowerCase()
       if (wrongChannel) {
         this.master._log.debug(
           'Invalid claim: channel is not the previously linked channel'
@@ -1168,7 +1236,7 @@ export default class EthereumAccount {
 
       const claimUsesWrongToken =
         !claim.tokenContract ||
-        claim.tokenContract.toLowerCase() !== // TODO Does the claim tokenContract always need to include 0x for this to work properly? (same with contract) Or is this approach safer?
+        claim.tokenContract.toLowerCase() !==
           this.master._tokenContract.address.toLowerCase()
       if (claimUsesWrongToken) {
         this.master._log.debug('Invalid claim: claim is for wrong ERC-20 token')
@@ -1185,7 +1253,8 @@ export default class EthereumAccount {
       }
     }
 
-    const isSigned = isValidClaimSignature(this.master._secp256k1!)(
+    const isSigned = isValidClaimSignature(
+      this.master._secp256k1!,
       claim,
       updatedChannel.sender
     )
@@ -1337,7 +1406,7 @@ export default class EthereumAccount {
         return
       }
 
-      const updatedChannel = await updateChannel<ClaimablePaymentChannel>(
+      const updatedChannel = await updateChannel(
         await this.master._contract,
         cachedChannel
       )
@@ -1454,10 +1523,6 @@ export default class EthereumAccount {
         return
       }
 
-      /**
-       * TODO Maybe the bilat protocol should include the tx receipt in the message?
-       */
-
       try {
         await this.sendMessage({
           requestId: await generateBtpRequestId(),
@@ -1473,12 +1538,29 @@ export default class EthereumAccount {
           }
         })
 
-        // Ensure that the channel was successfully closed
-        // TODO Handle errors?
-        const updatedChannel = await this.refreshChannel(
-          cachedChannel,
-          (channel): channel is undefined => !channel
-        )()
+        const checkForChannelClose = async () =>
+          fetchChannelById(await this.master._contract, cachedChannel.channelId)
+            .then(channel => !channel)
+            .catch(() => false)
+
+        const confirmChannelDidClose = (attempts = 0): Promise<boolean> =>
+          checkForChannelClose().then(async isClosed => {
+            if (isClosed) {
+              return true
+            } else if (attempts > 20) {
+              return false
+            } else {
+              await delay(250)
+              return confirmChannelDidClose(attempts + 1)
+            }
+          })
+
+        if (!(await confirmChannelDidClose())) {
+          this.master._log.error(
+            'Unable to confirm if the peer closed our outgoing channel'
+          )
+          return cachedChannel
+        }
 
         this.master._log.debug(
           `Peer successfully closed our outgoing channel ${
@@ -1488,8 +1570,6 @@ export default class EthereumAccount {
             'base'
           )} of collateral`
         )
-
-        return updatedChannel
       } catch (err) {
         this.master._log.debug(
           'Error while requesting peer to claim channel:',
@@ -1525,37 +1605,5 @@ export default class EthereumAccount {
 
     // Garbage collect the account at the top-level
     this.master._accounts.delete(this.account.accountName)
-  }
-
-  private refreshChannel = <
-    TPaymentChannel extends PaymentChannel,
-    RPaymentChannel extends TPaymentChannel | undefined
-  >(
-    channelOrId: string | TPaymentChannel,
-    predicate: (
-      channel: TPaymentChannel | undefined
-    ) => channel is RPaymentChannel
-  ) => async (attempts = 0): Promise<RPaymentChannel> => {
-    if (attempts > 20) {
-      throw new Error(
-        'Unable to confirm updated channel state after several attempts despite 1 block confirmation'
-      )
-    }
-
-    const updatedChannel =
-      typeof channelOrId === 'string'
-        ? ((await fetchChannel(await this.master._contract, channelOrId).catch(
-            // Swallow errors since we'll throw if all attempts fail
-            () => undefined
-          )) as TPaymentChannel)
-        : await updateChannel(await this.master._contract, channelOrId)
-
-    return predicate(updatedChannel)
-      ? // Return the new channel if the state was updated...
-        updatedChannel
-      : // ...or check again in 1 second if wasn't updated
-        delay(1000).then(() =>
-          this.refreshChannel(channelOrId, predicate)(attempts + 1)
-        )
   }
 }

@@ -8,6 +8,9 @@ import UNIDIRECTIONAL_TESTNET from '../abi/Unidirectional-testnet.json'
 import TOKEN_UNIDIRECTIONAL from '../abi/TokenUnidirectional.json'
 import { ContractReceipt } from 'ethers/contract'
 
+// Almost never use exponential notation
+BigNumber.config({ EXPONENTIAL_AT: 1e9 })
+
 const UNIDIRECTIONAL_METADATA: {
   [index: number]: {
     address: string
@@ -119,25 +122,52 @@ export interface SerializedClaim {
   tokenContract?: string
 }
 
-// TODO The param isn't really a PaymentChannel; it's serialized so all the bignumbers are strings
-export const deserializePaymentChannel = <
-  TPaymentChannel extends PaymentChannel
->(
-  channel: TPaymentChannel
-): TPaymentChannel => ({
+export interface SerializedPaymentChannel {
+  lastUpdated: number
+  channelId: string
+  receiver: string
+  sender: string
+  value: string
+  disputePeriod: string
+  disputedUntil?: string
+  contractAddress: string
+  tokenContract?: string
+  spent: string
+  signature?: string
+}
+
+export interface SerializedClaimablePaymentChannel
+  extends SerializedPaymentChannel {
+  signature: string
+}
+
+/**
+ * Parse BigNumbers in serialized payment channel state from database
+ * @param channel Serialized payment channel state, with BigNumbers converted to strings
+ */
+export const deserializePaymentChannel = (
+  channel: SerializedPaymentChannel
+): PaymentChannel => ({
   ...channel,
   value: new BigNumber(channel.value),
   disputePeriod: new BigNumber(channel.disputePeriod),
-  disputedUntil: channel.disputedUntil
-    ? new BigNumber(channel.disputedUntil)
-    : channel.disputedUntil,
+  disputedUntil:
+    typeof channel.disputedUntil === 'string'
+      ? new BigNumber(channel.disputedUntil)
+      : channel.disputedUntil,
   spent: new BigNumber(channel.spent)
 })
 
+/** Generate a pseudorandom hex string to use as a channel ID */
 export const generateChannelId = async () =>
   '0x' + (await promisify(randomBytes)(32)).toString('hex')
 
-/** TODO Should you be able to specify custom ABIs, addresses or contract instances? */
+/**
+ * Create an Ethers contract instances for the Machinomy payment channel contract
+ * @param signer Ethers signer and provider to perform read & write operations on the contract
+ * @param useTokenContract Should the default token contract address for the network be used?
+ * @param contractAddress Custom Machinomy contract address to load ABI
+ */
 export const getContract = async (
   signer: ethers.Signer,
   useTokenContract = false,
@@ -179,26 +209,67 @@ export const getContract = async (
   )
 }
 
-// TODO Add sanity checks to ensure it's *actually* the same channel?
-// TODO Is this essentially, update paychan *with* claim, whereas fetch channel is update paychan *without* claim?
+/**
+ * Check if a channel may have closed between two an initial state and a later proposed state
+ * - Attempts to protect against channelId reuse in Machinomy contracts,
+ *   in case a channel was closed and reopened
+ */
+export const didChannelClose = (
+  cachedChannel: PaymentChannel,
+  updatedChannel: PaymentChannel
+) =>
+  // Channel ID must be the same
+  cachedChannel.channelId !== updatedChannel.channelId ||
+  // Contract address must be the same
+  cachedChannel.contractAddress.toLowerCase() !==
+    updatedChannel.contractAddress.toLowerCase() ||
+  // Dispute period must be the same
+  !cachedChannel.disputePeriod.isEqualTo(updatedChannel.disputePeriod) ||
+  // If the first state is disputed until block x, the second state must also be disputed until block x
+  (cachedChannel.disputedUntil &&
+    (!updatedChannel.disputedUntil ||
+      !cachedChannel.disputedUntil.isEqualTo(updatedChannel.disputedUntil))) ||
+  // Receiver must be the same
+  cachedChannel.receiver.toLowerCase() !==
+    updatedChannel.receiver.toLowerCase() ||
+  // Sender must be the same
+  cachedChannel.sender.toLowerCase() !== updatedChannel.sender.toLowerCase() ||
+  // If the first state has a token contract, the second must have the same token contract
+  (cachedChannel.tokenContract &&
+    (!updatedChannel.tokenContract ||
+      cachedChannel.tokenContract.toLowerCase() !==
+        updatedChannel.tokenContract.toLowerCase())) ||
+  // Total value may not decrease
+  updatedChannel.value.isLessThan(cachedChannel.value)
+
+/**
+ * Fetch updated payment channel state, but include the existing signed claim
+ * - If fetching the state failed, return the existing cached state
+ * @param contract Ethers instance of the Machinomy ETH or ERC-20 contract
+ * @param cachedChannel Payment channel state with claim to fetch from network
+ */
 export const updateChannel = async <TPaymentChannel extends PaymentChannel>(
   contract: Contract,
   cachedChannel: TPaymentChannel
 ): Promise<TPaymentChannel | undefined> =>
-  fetchChannel(contract, cachedChannel.channelId)
-    .then(
-      updatedChannel =>
-        updatedChannel && {
-          ...cachedChannel,
-          ...updatedChannel,
-          spent: cachedChannel.spent,
-          signature: cachedChannel.signature
-        }
+  fetchChannelById(contract, cachedChannel.channelId)
+    .then(updatedChannel =>
+      updatedChannel && !didChannelClose(cachedChannel, updatedChannel)
+        ? ({
+            ...updatedChannel,
+            spent: cachedChannel.spent,
+            signature: cachedChannel.signature
+          } as TPaymentChannel)
+        : undefined
     )
     .catch(() => cachedChannel)
 
-// TODO Rename to "fetchChannelById" ??
-export const fetchChannel = async (
+/**
+ * Fetch payment channel state by channel ID
+ * @param contract Ethers instance of the Machinomy ETH or ERC-20 contract
+ * @param channelId Unique identifier for the payment channel
+ */
+export const fetchChannelById = async (
   contract: Contract,
   channelId: string
 ): Promise<PaymentChannel | undefined> => {
@@ -257,6 +328,7 @@ export const prepareTransaction = async ({
     gasPrice: ethers.utils.bigNumberify(gasPrice.toString())
   }
 
+  // If a gasLimit was provided, use that; otherwise, estimate how much gas we need
   const estimatedGasLimit: ethers.utils.BigNumber = gasLimit
     ? ethers.utils.bigNumberify(gasLimit.toString())
     : await contract.estimate[methodName](...params, overrides)
@@ -309,7 +381,7 @@ export const hasClaim = (
 ): channel is ClaimablePaymentChannel => !!channel && !!channel.signature
 
 /**
- * What amount in the payment channel as been sent to the receiver?
+ * What amount in the payment channel has been sent to the receiver?
  * @param channel Payment channel state
  */
 export const spentFromChannel = (channel?: PaymentChannel): BigNumber =>
@@ -330,12 +402,15 @@ export const isDisputed = (channel: PaymentChannel): boolean =>
   !!channel.disputedUntil
 
 /**
- * TODO asdklfjasf
- * @param secp256k1 TODO adsfadsf
+ * Was the serialized claim correctly encoded and signed by the given recoveryAddress?
+ * @param secp256k1 Instance of bitcoin-ts WASM module to sign and verify claims
+ * @param claim Serialized payment channel channel
+ * @param recoveryAddress Address to check that the claim was signed by (returns false if signed by a different address)
  */
-export const isValidClaimSignature = (secp256k1: Secp256k1) => (
+export const isValidClaimSignature = (
+  secp256k1: Secp256k1,
   claim: SerializedClaim,
-  expectedSenderAddress: string
+  recoveryAddress: string
 ): boolean => {
   const signature = claim.signature.slice(0, -2) // Remove recovery param from end
   const signatureBuffer = hexToBuffer(signature)
@@ -360,15 +435,15 @@ export const isValidClaimSignature = (secp256k1: Secp256k1) => (
   }
 
   const senderAddress = ethers.utils.computeAddress(publicKey)
-  return senderAddress.toLowerCase() === expectedSenderAddress.toLowerCase()
+  return senderAddress.toLowerCase() === recoveryAddress.toLowerCase()
 }
 
 /**
- * TODO
- * @param contractAddress TODO
- * @param channelId TODO
- * @param value TODO
- * @param tokenContract TODO
+ * Encode and hash parameters of payment channel claim as Ethereum message
+ * @param contractAddress Ethereum address of the payment channel contract used
+ * @param channelId Identifier for the channel
+ * @param value Total value the receiver in the channel can withdraw on-chain
+ * @param tokenContract Address of the ERC-20 token contract
  */
 export const createPaymentDigest = (
   contractAddress: string,
@@ -395,14 +470,14 @@ export const createPaymentDigest = (
 
 /**
  * Convert the given hexadecimal string to a Buffer
- * @param hexString Hexadecimal string, which may optionally begin with "0x"
+ * @param hexStr Hexadecimal string, which may optionally begin with "0x"
  */
-export const hexToBuffer = (hexString: string) =>
-  Buffer.from(stripHexPrefix(hexString), 'hex')
+export const hexToBuffer = (hexStr: string) =>
+  Buffer.from(stripHexPrefix(hexStr), 'hex')
 
 /**
  * If the given string begins with "0x", remove it
- * @param hexString Hexadecimal string, which may optionally begin with "0x"
+ * @param hexStr Hexadecimal string, which may optionally begin with "0x"
  */
-const stripHexPrefix = (hexString: string) =>
-  hexString.startsWith('0x') ? hexString.slice(2) : hexString
+export const stripHexPrefix = (hexStr: string) =>
+  hexStr.startsWith('0x') ? hexStr.slice(2) : hexStr

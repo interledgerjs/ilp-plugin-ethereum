@@ -1,4 +1,4 @@
-# Interledger Ethereum Plugin
+# Interledger Ethereum Payment Channel Plugin
 
 [![NPM Package](https://img.shields.io/npm/v/ilp-plugin-ethereum.svg?style=flat-square&logo=npm)](https://npmjs.org/package/ilp-plugin-ethereum)
 [![CircleCI](https://img.shields.io/circleci/project/github/interledgerjs/ilp-plugin-ethereum/master.svg?style=flat-square&logo=circleci)](https://circleci.com/gh/interledgerjs/ilp-plugin-ethereum/master)
@@ -10,7 +10,7 @@
 
 ## Overview
 
-Settle Interledger payments with ether and ERC-20 tokens.
+Settle Interledger packets with streaming micropayments of ETH or an ERC-20 token.
 
 Two plugins peer with one another over WebSockets and exchange Interledger packets denominated in ETH or a particular ERC-20 token. One or both peers may collateralize a unidirectional, or one-way payment channel from themselves to the other peer. Then, they may send settlements as payment channel claims at configurable frequency. Two peers may extend nearly no credit to one another and require settlements before or after every ILP packet, or extend greater credit to one another and settle less frequently.
 
@@ -27,14 +27,14 @@ Node.js 10+ is required.
 ## Roadmap
 
 - [x] ETH payment channel client
-- [x] Optimization for streaming payments
+- [x] Optimizations for streaming payments
 - [x] ERC-20 payment channel client
 - [ ] More robust testing
 - [ ] Refactor plugin architecture to use HTTP-based interface
-- [ ] Eliminate of internal boilerplate code
+- [ ] Eliminate internal boilerplate code
 - [ ] Update Machinomy contract to support MetaMask and hardware wallets
 - [ ] Smart liquidity management and negotiation for incoming capacity
-- [ ] Full code audit
+- [ ] Audit codebase
 
 ## API
 
@@ -55,7 +55,9 @@ All ILP packet amounts and accounting must use units of _gwei_, or units to 9 de
   - `"ropsten"` to use Infura & Etherscan on the Ropsten proof of work testnet
   - `"kovan"` to use Infura & Etherscan on the Kovan proof of authority testnet (Parity)
   - `"rinkeby"` to use Infura & Etherscan on the Rinkeby proof of authority testnet (Geth)
+  - [`ethers.providers.Provider`](https://docs.ethers.io/ethers.js/html/api-providers.html) to supply a custom provider
 - Default: `"homestead"`
+- Provider used to connect to an Ethereum node for a particular chain/testnet
 
 #### `ethereumWallet`
 
