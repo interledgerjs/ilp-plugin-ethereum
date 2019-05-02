@@ -45,6 +45,11 @@ const TOKEN_UNIDIRECTIONAL_METADATA: {
     metadata: typeof TOKEN_UNIDIRECTIONAL
   }
 } = {
+  /** Mainnet */
+  1: {
+    metadata: TOKEN_UNIDIRECTIONAL,
+    address: '0x59b941b53403f84f42d5c11117b35564881b72f6'
+  },
   /** Ropsten (cross-client PoW) */
   3: {
     metadata: TOKEN_UNIDIRECTIONAL,
