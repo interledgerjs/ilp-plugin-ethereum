@@ -290,7 +290,7 @@ export default class EthereumAccount {
   /**
    * Create a channel with the given amount or deposit the given amount to an existing outgoing channel,
    * invoking the authorize callback to confirm the transaction fee
-   * - Fund amount is in units of wei
+   * - Fund amount is in base units (wei for ETH)
    */
   async fundOutgoingChannel(
     value: BigNumber,
@@ -336,7 +336,7 @@ export default class EthereumAccount {
   }
 
   /**
-   * Open a channel for the given amount in units of wei
+   * Open a channel for the given amount in base units (wei for ETH)
    * - Must always be called from a task in the outgoing queue
    */
   private async openChannel(
@@ -482,7 +482,7 @@ export default class EthereumAccount {
   }
 
   /**
-   * Deposit the given amount in units of wei to the given channel
+   * Deposit the given amount in base units (wei for ETH) to the given channel
    * - Must always be called from a task in the outgoing queue
    */
   private async depositToChannel(

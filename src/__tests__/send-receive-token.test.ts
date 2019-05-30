@@ -48,7 +48,7 @@ test('tokens can be sent between two peers', async t => {
   )
   const tokenContract = await tokenFactory.deploy()
 
-  // Mint test tokens for both accounts (100 units of the token, assuming of -18 base)
+  // Mint test tokens for both accounts (100 units of the token, assuming -18 base)
   await tokenContract.functions.mint(
     await clientWallet.getAddress(),
     new BigNumber(10).exponentiatedBy(20).toString()

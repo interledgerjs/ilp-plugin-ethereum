@@ -14,7 +14,7 @@ Settle Interledger packets with streaming micropayments of ETH or an ERC-20 toke
 
 Two plugins peer with one another over WebSockets and exchange Interledger packets denominated in ETH or a particular ERC-20 token. One or both peers may collateralize a unidirectional, or one-way payment channel from themselves to the other peer. Then, they may send settlements as payment channel claims at configurable frequency. Two peers may extend nearly no credit to one another and require settlements before or after every ILP packet, or extend greater credit to one another and settle less frequently.
 
-[Machinomy smart contracts](https://github.com/machinomy/machinomy) are used for the unidirectional ETH and ERC-20 payment channels.
+[Machinomy smart contracts](https://github.com/machinomy/machinomy/tree/master/packages/contracts/contracts) are used for the unidirectional ETH and ERC-20 payment channels.
 
 ## Install
 
@@ -79,7 +79,7 @@ All ILP packet amounts and accounting must use units of _gwei_, or units to 9 de
 >
 > Servers _do_ automatically open channels. If a client has opened a channel with a value above the configurable `minIncomingChannelAmount`, the server will automatically open a channel back to the client with a value of `outgoingChannelAmount`. When the channel is half empty, the server will also automatically top up the value of the channel by the `outgoingChannelAmount`.
 >
-> The balance configuration has been simplified for servers. Clients must prefund before sending any packets through a server, and if a client fulfills packets sent to them through a server, the server will automatically settle such that they owe 0 to the client. This configuration was chosen because it assumes the server would extend no credit to anonymous client, and clients extend little credit to servers, necessitating frequent settlements.
+> The balance configuration has been simplified for servers. Clients must prefund before sending any packets through a server, and if a client fulfills packets sent to them through a server, the server will automatically settle such that they owe 0 to the client. This configuration was chosen because it assumes the server would extend no credit to an anonymous client, and clients extend little credit to servers, necessitating frequent settlements.
 >
 > ### Closing Channels
 >
