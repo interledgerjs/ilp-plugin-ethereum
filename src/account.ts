@@ -39,7 +39,8 @@ import {
   SerializedClaimablePaymentChannel,
   SerializedPaymentChannel,
   spentFromChannel,
-  updateChannel
+  updateChannel,
+  didChannelClose
 } from './utils/channel'
 import ReducerQueue from './utils/queue'
 
@@ -942,18 +943,20 @@ export default class EthereumAccount {
           return checkForDeposit(attempts + 1)
         }
 
-        // Rectify the two forked states
+        /**
+         * Rectify the two forked states
+         * - It's *possible* that between the fetching the channel state and when the task below is queued,
+         *   we've already closed the old channel and the peer has linked a new channel with nearly identical
+         *   properties (same channelId, sender, receiver, settlingPeriod, etc)
+         * - The peer could try to profit off this by opening the 2nd channel with a lesser value than the first
+         *   (so we think the value is higher than it really is), but `didChannelClose` will catch that, because
+         *   it knows the channel value can never decrease
+         */
         await this.account.incoming.add(async newCachedChannel => {
-          // Ensure it's the same channel, except for the value. Otherwise, don't update.
-          const isSameChannel =
-            newCachedChannel &&
-            newCachedChannel.channelId === cachedChannel.channelId &&
-            newCachedChannel.disputePeriod.isEqualTo(
-              cachedChannel.disputePeriod
-            ) &&
-            newCachedChannel.sender === cachedChannel.sender &&
-            newCachedChannel.receiver === cachedChannel.receiver
-          if (!newCachedChannel || !isSameChannel) {
+          if (
+            !newCachedChannel ||
+            didChannelClose(cachedChannel, newCachedChannel)
+          ) {
             this.master._log.debug(
               `Incoming channel was closed while confirming deposit: reverting to old state`
             )
@@ -966,6 +969,11 @@ export default class EthereumAccount {
           this.master._log.debug('Confirmed deposit to incoming channel')
           return {
             ...newCachedChannel,
+            /**
+             * Value of newCachedChannel should *always* be >= the value of the fetched channel,
+             * since `didChannelClose` ensures that the channel value didn't decrease between
+             * the two cached states
+             */
             value: BigNumber.max(updatedChannel.value, newCachedChannel.value)
           }
         })

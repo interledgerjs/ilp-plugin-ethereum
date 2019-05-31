@@ -365,11 +365,17 @@ export default class EthereumPlugin extends EventEmitter2
     if (this._tokenContract) {
       this._assetCode = await this._tokenContract.functions
         .symbol()
-        .catch(() => 'tokens')
+        .catch(err => {
+          // DAI incorrectly implements 'symbol' as bytes32, not a string, which throws
+          if (typeof err.value === 'string') {
+            return ethers.utils.parseBytes32String(err.value)
+          } else {
+            return 'tokens'
+          }
+        })
 
       this._assetScale = await this._tokenContract.functions
         .decimals()
-        .then((num: ethers.utils.BigNumber) => num.toNumber())
         .catch(() => {
           this._log.info(
             `Configured ERC-20 doesn't have decimal place metadata; defaulting to 18 decimal places`
