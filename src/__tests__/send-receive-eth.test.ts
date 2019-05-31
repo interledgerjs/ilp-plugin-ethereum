@@ -5,7 +5,7 @@ import test from 'ava'
 import createLogger from 'ilp-logger'
 import { convert, eth, gwei, wei } from '@kava-labs/crypto-rate-utils'
 
-test('money can be sent between two peers', async t => {
+test('ether can be sent between two peers', async t => {
   const port = await getPort()
 
   const clientPlugin = new EthereumPlugin(
