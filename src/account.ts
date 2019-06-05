@@ -187,12 +187,21 @@ export default class EthereumAccount {
 
     this.watcher = this.startChannelWatcher()
 
-    this.autoFundOutgoingChannel().catch(err => {
-      this.master._log.error(
-        'Error attempting to auto fund outgoing channel: ',
-        err
-      )
-    })
+    /**
+     * Channel should be "auto funded" only if the client is online. For example:
+     * - The account just got created and no Ethereum address is linked (which requires it to be fetched from an online client)
+     * - An incoming paychan claim was received, and may put it above the threshold
+     * - An outgoing paychan claim was sent, so a top-up may be required, which likely only happened
+     *   if the client was online and e.g. just returned a FULFILL packet
+     */
+    if (!this.account.ethereumAddress) {
+      this.autoFundOutgoingChannel().catch(err => {
+        this.master._log.error(
+          'Error attempting to auto fund outgoing channel: ',
+          err
+        )
+      })
+    }
   }
 
   private persistAccountData(): void {
@@ -722,8 +731,7 @@ export default class EthereumAccount {
 
     const receipt = await this.master._queueTransaction(sendTransaction)
 
-    const didApprove =
-      receipt.events && receipt.events.map(o => o.event).includes('Approval')
+    const didApprove = hasEvent(receipt, 'Approval')
     if (!didApprove) {
       throw new Error(
         `Failed to unlock transfers for ${this.master._assetCode}`
@@ -1290,11 +1298,16 @@ export default class EthereumAccount {
     }
 
     // Finally, if the claim is new, ensure it isn't already linked to another account
-    // (do this last to prevent race conditions)
     if (!cachedChannel) {
       /**
        * Ensure no channel can be linked to multiple accounts
        * - Each channel key is a mapping of channelId -> accountName
+       * - Since the store is cached in JS, no race condition since get & set are in the same closure
+       *   with no async operations in between
+       * - When fetching the initial channel state, Ethers throws if the channelId isn't the precise length,
+       *   prefixed with 0x, and lowercased, which *should* check against linking two channelIds that fail
+       *   string equality but map to the same channel on different accounts
+       *   (TODO Add tests for this!)
        */
       const channelKey = `${claim.channelId}:incoming-channel`
       await this.master._store.load(channelKey)
